@@ -11,12 +11,11 @@ jobs:
       - name: Download source snapshot
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download bootstrap-source-v1.4.8 --pattern LianAi-Keyboard-source-v1.4.8.zip
+        run: gh release download bootstrap-source-v1.4.8 --pattern LianAi-Keyboard-source-v1.4.8.zip --dir /tmp
       - name: Replace bootstrap with complete source
         run: |
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          unzip -q LianAi-Keyboard-source-v1.4.8.zip
-          rm LianAi-Keyboard-source-v1.4.8.zip
+          unzip -q /tmp/LianAi-Keyboard-source-v1.4.8.zip
           git config user.name "LianAi Release Bot"
           git config user.email "1213109176kgy-png@users.noreply.github.com"
           git add -A
