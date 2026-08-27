@@ -16,6 +16,7 @@ jobs:
         run: |
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           unzip -q /tmp/LianAi-Keyboard-source-v1.4.8.zip
+          rm -rf .github/workflows
           git config user.name "LianAi Release Bot"
           git config user.email "1213109176kgy-png@users.noreply.github.com"
           git add -A
