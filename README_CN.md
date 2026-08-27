@@ -33,6 +33,8 @@
 <p align="center">
   <img src="docs/images/keyboard-26.png" alt="26 键拼音键盘" width="31%" />
   <img src="docs/images/keyboard-9.png" alt="九宫格拼音键盘" width="31%" />
+  <img src="docs/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260827124940_10_982.jpgg" alt="九宫格拼音键盘" width="31%" />
+  <img src="docs/images/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260827124941_11_982.jpg" alt="九宫格拼音键盘" width="31%" />
   <img src="docs/images/model-settings.png" alt="大模型与提示词配置" width="31%" />
 </p>
 
