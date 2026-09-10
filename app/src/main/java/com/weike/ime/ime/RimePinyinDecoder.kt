@@ -85,6 +85,10 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
         learning: List<PinyinLearning>
     ): Boolean = withContext(rimeDispatcher) {
         sessionMutex.withLock {
+            // Warm the character-reading table on the Rime worker thread so the
+            // first nine-key composition never parses pinyin.txt on the main
+            // thread via pinyinForDisplay().
+            termReadings()
             syncOverlay(terms, typingDictionary, learning)
             if (isReady) return@withLock true
             statusText = "\u6b63\u5728\u52a0\u8f7d\u79bb\u7ebf\u8bcd\u5178"

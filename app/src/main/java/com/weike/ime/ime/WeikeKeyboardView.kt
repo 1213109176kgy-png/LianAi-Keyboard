@@ -241,8 +241,18 @@ class WeikeKeyboardView(
     private var selectedRelation = 0
     private var polishDraft = ""
     private var polishCursor = 0
+    /** Enter key caption, derived from the focused field's IME action. */
+    private var enterLabel = "发送"
     private var candidateExpanded = false
     private var emojiPanel = false
+    /** Active emoji category index and page inside the emoji panel. */
+    private var emojiCategory = 0
+    private var emojiPage = 0
+    /** Symbols page: 0 = numbers & basic punctuation, 1 = CJK brackets & extras. */
+    private var symbolsPage = 0
+    /** English shift: single tap = one-shot uppercase, double tap = caps lock. */
+    private var capsLock = false
+    private var lastShiftTapAt = 0L
     /** Language of the keyboard embedded inside the Super Say panel. */
     private var superSayPinyin = true
     private var polishOptions: List<String> = emptyList()
@@ -290,6 +300,10 @@ class WeikeKeyboardView(
     private val muted: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(218, 196, 204) else Color.rgb(153, 153, 153)
     private val accent: Int get() = Color.rgb(255, 107, 157)
     private val actionIcon: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.BLACK else Color.WHITE
+    private val cardBg: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(58, 46, 51) else Color.WHITE
+    private val cardSoftBg: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(66, 52, 58) else Color.rgb(255, 241, 245)
+    private val cardOptionBg: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(66, 52, 58) else Color.rgb(255, 251, 252)
+    private val cardStroke: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(105, 82, 91) else Color.rgb(255, 220, 230)
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         context.getSystemService(VibratorManager::class.java)?.defaultVibrator
     } else {
@@ -340,7 +354,8 @@ class WeikeKeyboardView(
         polishLoading: Boolean = this.polishLoading,
         replyOptions: List<String> = this.replyOptions,
         replyLoading: Boolean = this.replyLoading,
-        replyEmotion: String = this.replyEmotion
+        replyEmotion: String = this.replyEmotion,
+        enterLabel: String = this.enterLabel
     ) {
         val normalizedModes = modeOptions.distinct().filter { it != KeyboardMode.SYMBOLS }
             .ifEmpty { listOf(KeyboardMode.PINYIN) }
@@ -394,6 +409,8 @@ class WeikeKeyboardView(
         this.pinyinStatus = pinyinStatus
         this.pinyinNineKey = pinyinNineKey
         this.symbolsUseEnglish = symbolsUseEnglish
+        this.enterLabel = enterLabel
+        if (targetMode != KeyboardMode.ENGLISH) capsLock = false
         this.nineKeySymbols = nineKeySymbols
         this.keyboardTheme = keyboardTheme
         this.showCloseButton = showCloseButton
@@ -527,7 +544,12 @@ class WeikeKeyboardView(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val base = when {
-            isLandscape() -> dp(260)
+            isLandscape() -> {
+                // Scale with the physical screen instead of a fixed 260dp so keys
+                // stay comfortably tappable (>40dp) on tall landscape displays.
+                val screenH = resources.configuration.screenHeightDp.coerceAtLeast(320)
+                dp((screenH * 0.78f).toInt().coerceIn(260, 340))
+            }
             mode == KeyboardMode.VOICE || mode == KeyboardMode.ASK -> dp(500)
             else -> dp(368)
         }
@@ -597,6 +619,38 @@ class WeikeKeyboardView(
             else -> drawKeyboard(canvas, mode == KeyboardMode.PINYIN)
         }
         if (cursorSliderEnabled) drawCursorSlider(canvas)
+        drawKeyPreview(canvas)
+    }
+
+    /**
+     * Magnified bubble above the pressed key, the standard "key press preview"
+     * affordance. Only shown for targets that opted in via previewLabel.
+     */
+    private fun drawKeyPreview(canvas: Canvas) {
+        val target = activeTarget ?: return
+        val preview = target.previewLabel ?: return
+        if (activeTargetCancelled || longPressTriggered) return
+        val pressed = pressedBox ?: return
+        if (!sameBox(pressed, target.box)) return
+        val box = target.box
+        val bubbleHeight = box.height() + dp(22)
+        paint.textSize = sp(28)
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textAlign = Paint.Align.CENTER
+        val textWidth = paint.measureText(preview)
+        val bubbleWidth = maxOf(box.width() + dp(18), textWidth + dp(26))
+        val left = (box.centerX() - bubbleWidth / 2f).coerceIn(dp(2), (width - dp(2) - bubbleWidth).coerceAtLeast(dp(2)))
+        val top = (box.top - dp(10) - bubbleHeight).coerceAtLeast(dp(2))
+        val bubble = RectF(left, top, left + bubbleWidth, top + bubbleHeight)
+        rounded(canvas, bubble, dp(12), key)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = dp(1)
+        paint.color = cardStroke
+        canvas.drawRoundRect(bubble, dp(12), dp(12), paint)
+        paint.style = Paint.Style.FILL
+        paint.color = white
+        val baseline = bubble.centerY() - (paint.ascent() + paint.descent()) / 2f
+        canvas.drawText(preview, bubble.centerX(), baseline, paint)
     }
 
     private fun drawHeader(canvas: Canvas) {
@@ -961,7 +1015,7 @@ class WeikeKeyboardView(
 
     private fun drawReplyRecommendations(canvas: Canvas) {
         val card = RectF(dp(5), dp(58), width - dp(5), contentBottom() - dp(10))
-        rounded(canvas, card, dp(16), Color.WHITE)
+        rounded(canvas, card, dp(16), cardBg)
         if (replyLoading) {
             gradientRounded(canvas, RectF(width / 2f - dp(50), card.top + dp(65), width / 2f + dp(50), card.top + dp(165)), dp(50), Color.rgb(255, 137, 184), Color.rgb(255, 151, 126))
             label(canvas, "✨", width / 2f, card.top + dp(126), 32f, Color.WHITE, Paint.Align.CENTER, true)
@@ -970,17 +1024,17 @@ class WeikeKeyboardView(
             return
         }
         val emotion = RectF(card.left + dp(14), card.top + dp(14), card.right - dp(54), card.top + dp(66))
-        rounded(canvas, emotion, dp(14), Color.rgb(255, 241, 245))
+        rounded(canvas, emotion, dp(14), cardSoftBg)
         label(canvas, "😊", emotion.left + dp(30), emotion.centerY() + dp(8), 24f, white, Paint.Align.CENTER)
         label(canvas, replyEmotion.ifBlank { "积极期待" }, emotion.left + dp(57), emotion.centerY() + dp(5), 14f, Color.rgb(255, 137, 126), Paint.Align.LEFT, true)
         label(canvas, "AI推荐回复（点击使用）", card.left + dp(14), card.top + dp(91), 12f, accent, Paint.Align.LEFT)
         replyOptions.take(3).forEachIndexed { index, option ->
             val top = card.top + dp(104) + index * dp(75)
             val box = RectF(card.left + dp(14), top, card.right - dp(14), top + dp(63))
-            rounded(canvas, box, dp(14), Color.rgb(255, 251, 252))
+            rounded(canvas, box, dp(14), cardOptionBg)
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = dp(1)
-            paint.color = Color.rgb(255, 220, 230)
+            paint.color = cardStroke
             canvas.drawRoundRect(box, dp(14), dp(14), paint)
             paint.style = Paint.Style.FILL
             leftClippedLabel(canvas, option, RectF(box.left + dp(12), box.top, box.right - dp(12), box.bottom), 13f, white)
@@ -994,7 +1048,7 @@ class WeikeKeyboardView(
 
     private fun drawReplyClose(canvas: Canvas, card: RectF) {
         val close = RectF(card.right - dp(46), card.top + dp(10), card.right - dp(10), card.top + dp(46))
-        rounded(canvas, close, dp(18), Color.rgb(255, 242, 246))
+        rounded(canvas, close, dp(18), cardSoftBg)
         label(canvas, "×", close.centerX(), close.centerY() + dp(6), 22f, accent, Paint.Align.CENTER)
         target(close, hapticFeedback = HapticFeedbackConstants.GESTURE_END) { actions.dismissReplyOptions() }
     }
@@ -1047,7 +1101,8 @@ class WeikeKeyboardView(
         val result = mutableListOf<AnswerLine>()
         paint.textSize = dp(sizeSp.toInt())
         paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-        text.split('\n').forEachIndexed { paragraphIndex, paragraph ->
+        val paragraphs = text.split('\n')
+        paragraphs.forEachIndexed { paragraphIndex, paragraph ->
             if (paragraph.isEmpty()) {
                 result += AnswerLine("", sizeSp, color, bold, 1f, lineHeight)
             } else {
@@ -1058,7 +1113,7 @@ class WeikeKeyboardView(
                     remaining = remaining.substring(count)
                 }
             }
-            if (paragraphIndex != text.split('\n').lastIndex) {
+            if (paragraphIndex != paragraphs.lastIndex) {
                 // Paragraph spacing is represented by an empty line entry.
             }
         }
@@ -1074,10 +1129,10 @@ class WeikeKeyboardView(
         val gap = dp(6)
         val keyHeight = (contentBottom() - top - dp(8) - keyboardBottomReserve() - gap * 4) / 5f
         val edge = dp(5)
-        val letterWidth = (width - edge * 2 - dp(7) * 9) / 10f
+        val letterWidth = (width - edge * 2 - dp(4) * 9) / 10f
         numberRow(canvas, top, keyHeight, edge, letterWidth)
         letters(canvas, "qwertyuiop", top + keyHeight + gap, keyHeight, pinyin, edge, letterWidth)
-        val secondWidth = letterWidth * 9 + dp(7) * 8
+        val secondWidth = letterWidth * 9 + dp(4) * 8
         letters(canvas, "asdfghjkl", top + (keyHeight + gap) * 2, keyHeight, pinyin, (width - secondWidth) / 2f, letterWidth)
         thirdRow(canvas, top + (keyHeight + gap) * 3, keyHeight, pinyin, letterWidth)
         bottomRow(canvas, top + (keyHeight + gap) * 4, keyHeight, pinyin, letterWidth)
@@ -1091,10 +1146,10 @@ class WeikeKeyboardView(
         val gap = dp(6)
         val keyHeight = (contentBottom() - top - dp(8) - keyboardBottomReserve() - gap * 4) / 5f
         val edge = dp(5)
-        val letterWidth = (width - edge * 2 - dp(7) * 9) / 10f
+        val letterWidth = (width - edge * 2 - dp(4) * 9) / 10f
         numberRow(canvas, top, keyHeight, edge, letterWidth)
         letters(canvas, "qwertyuiop", top + keyHeight + gap, keyHeight, pinyin, edge, letterWidth)
-        val secondWidth = letterWidth * 9 + dp(7) * 8
+        val secondWidth = letterWidth * 9 + dp(4) * 8
         letters(canvas, "asdfghjkl", top + (keyHeight + gap) * 2, keyHeight, pinyin, (width - secondWidth) / 2f, letterWidth)
         thirdRow(canvas, top + (keyHeight + gap) * 3, keyHeight, pinyin, letterWidth)
         bottomRow(canvas, top + (keyHeight + gap) * 4, keyHeight, pinyin, letterWidth)
@@ -1102,9 +1157,9 @@ class WeikeKeyboardView(
 
     private fun drawReplyPrompt(canvas: Canvas, error: String?) {
         val card = RectF(dp(12), dp(66), width - dp(12), contentBottom() - keyboardBottomReserve() - dp(12))
-        rounded(canvas, card, dp(16), Color.WHITE)
-        label(canvas, "帮你回", card.left + dp(18), card.top + dp(34), 17f, Color.rgb(45, 52, 54), Paint.Align.LEFT, true)
-        label(canvas, "复制对方的话，AI帮你分析并生成回复", card.left + dp(18), card.top + dp(60), 13f, Color.rgb(153, 153, 153), Paint.Align.LEFT)
+        rounded(canvas, card, dp(16), cardBg)
+        label(canvas, "帮你回", card.left + dp(18), card.top + dp(34), 17f, white, Paint.Align.LEFT, true)
+        label(canvas, "复制对方的话，AI帮你分析并生成回复", card.left + dp(18), card.top + dp(60), 13f, muted, Paint.Align.LEFT)
 
         val button = RectF(card.left + dp(16), card.top + dp(82), card.right - dp(16), card.top + dp(132))
         rounded(canvas, button, dp(16), accent)
@@ -1112,14 +1167,14 @@ class WeikeKeyboardView(
         target(button, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.analyzeClipboardReply() }
 
         val tip = error?.takeIf { it.isNotBlank() } ?: "复制微信或短信中的消息后，点击上方按钮"
-        val tipColor = if (error.isNullOrBlank()) Color.rgb(153, 153, 153) else Color.rgb(255, 107, 157)
+        val tipColor = if (error.isNullOrBlank()) muted else accent
         label(canvas, tip, card.centerX(), button.bottom + dp(34), 12f, tipColor, Paint.Align.CENTER)
     }
 
     private fun drawPolishPrompt(canvas: Canvas, error: String?) {
         if (polishLoading) {
             val card = RectF(dp(5), dp(56), width - dp(5), contentBottom() - dp(10))
-            rounded(canvas, card, dp(16), Color.WHITE)
+            rounded(canvas, card, dp(16), cardBg)
             gradientRounded(canvas, RectF(width / 2f - dp(55), card.top + dp(58), width / 2f + dp(55), card.top + dp(168)), dp(55), Color.rgb(255, 137, 184), Color.rgb(255, 151, 126))
             label(canvas, "✨", width / 2f, card.top + dp(126), 34f, Color.WHITE, Paint.Align.CENTER, true)
             label(canvas, "AI正在优化...", width / 2f, card.top + dp(215), 18f, accent, Paint.Align.CENTER, true)
@@ -1128,7 +1183,7 @@ class WeikeKeyboardView(
         }
         if (polishOptions.isNotEmpty()) {
             val card = RectF(dp(5), dp(56), width - dp(5), contentBottom() - dp(10))
-            rounded(canvas, card, dp(16), Color.WHITE)
+            rounded(canvas, card, dp(16), cardBg)
             label(canvas, "AI优化话术（点击选择）", card.left + dp(14), card.top + dp(29), 13f, accent, Paint.Align.LEFT)
             val close = RectF(card.right - dp(43), card.top + dp(8), card.right - dp(9), card.top + dp(42))
             label(canvas, "×", close.centerX(), close.centerY() + dp(6), 23f, accent, Paint.Align.CENTER)
@@ -1136,8 +1191,8 @@ class WeikeKeyboardView(
             polishOptions.take(3).forEachIndexed { index, option ->
                 val top = card.top + dp(52) + index * dp(76)
                 val box = RectF(card.left + dp(14), top, card.right - dp(14), top + dp(64))
-                rounded(canvas, box, dp(14), Color.rgb(255, 251, 252))
-                paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1); paint.color = Color.rgb(255, 220, 230)
+                rounded(canvas, box, dp(14), cardOptionBg)
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1); paint.color = cardStroke
                 canvas.drawRoundRect(box, dp(14), dp(14), paint); paint.style = Paint.Style.FILL
                 leftClippedLabel(canvas, option, RectF(box.left + dp(12), box.top, box.right - dp(12), box.bottom), 14f, white)
                 target(box, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.selectPolishOption(option) }
@@ -1145,7 +1200,7 @@ class WeikeKeyboardView(
             return
         }
         val card = RectF(dp(6), dp(60), width - dp(6), dp(228))
-        rounded(canvas, card, dp(15), Color.WHITE)
+        rounded(canvas, card, dp(15), cardBg)
         // Super-say owns an internal editor. Render the live Pinyin composition
         // beside confirmed text so typing never appears to vanish before a pick.
         val cursor = polishCursor.coerceIn(0, polishDraft.length)
@@ -1197,10 +1252,10 @@ class WeikeKeyboardView(
             val chip = RectF(left, chipTop, left + chipWidth, chipTop + dp(28))
             if (index == selectedRelation) gradientRounded(canvas, chip, dp(12), Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
             else {
-                rounded(canvas, chip, dp(12), Color.rgb(255, 249, 250))
+                rounded(canvas, chip, dp(12), cardSoftBg)
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = dp(1)
-                paint.color = Color.rgb(255, 229, 236)
+                paint.color = cardStroke
                 canvas.drawRoundRect(chip, dp(12), dp(12), paint)
                 paint.style = Paint.Style.FILL
             }
@@ -1214,13 +1269,13 @@ class WeikeKeyboardView(
     }
 
     private fun numberRow(canvas: Canvas, y: Float, h: Float, inset: Float, keyWidth: Float) {
-        val gap = dp(7)
+        val gap = dp(4)
         "1234567890".forEachIndexed { index, character ->
             val x = inset + index * (keyWidth + gap)
             val box = RectF(x, y, x + keyWidth, y + h)
             key(canvas, box)
             centeredLabel(canvas, character.toString(), box, 18f, white, Paint.Align.CENTER)
-            target(box, keySound = true) { actions.typeEnglish(character.toString()) }
+            target(box, keySound = true, previewLabel = character.toString()) { actions.typeEnglish(character.toString()) }
         }
     }
 
@@ -1246,7 +1301,7 @@ class WeikeKeyboardView(
                 val box = RectF(x, y, x + keyWidth, y + keyHeight)
                 key(canvas, box)
                 if (letters == "'") {
-                    label(canvas, letters, box.centerX(), box.centerY() + dp(7), keyLetterSize(25f), white, Paint.Align.CENTER, true)
+                    label(canvas, "分词", box.centerX(), box.centerY() + dp(5), keyLetterSize(14f), white, Paint.Align.CENTER, true)
                 } else {
                     val letterBaseline = if (isLandscape()) box.centerY() + dp(6) else box.centerY() - dp(3)
                     label(canvas, letters, box.centerX(), letterBaseline, keyLetterSize(17f), white, Paint.Align.CENTER, true)
@@ -1295,15 +1350,19 @@ class WeikeKeyboardView(
 
     private fun drawNineKeySymbolSidebar(canvas: Canvas, viewport: RectF) {
         nineKeySymbolViewport = RectF(viewport)
-        val itemHeight = dp(48)
-        val contentHeight = (nineKeySymbols.size * itemHeight).coerceAtLeast(viewport.height())
+        // Match the three visible shortcut cells to the adjacent 3x3 keypad rows.
+        // Additional shortcuts remain reachable by scrolling the sidebar.
+        val itemGap = dp(7)
+        val itemHeight = (viewport.height() - itemGap * 2) / 3f
+        val itemStride = itemHeight + itemGap
+        val contentHeight = (nineKeySymbols.size * itemStride - itemGap).coerceAtLeast(viewport.height())
         nineKeySymbolMaxScroll = (contentHeight - viewport.height()).coerceAtLeast(0f)
         nineKeySymbolScrollY = nineKeySymbolScrollY.coerceIn(0f, nineKeySymbolMaxScroll)
         canvas.save()
         canvas.clipRect(viewport)
         nineKeySymbols.forEachIndexed { index, symbol ->
-            val y = viewport.top + index * itemHeight - nineKeySymbolScrollY
-            val box = RectF(viewport.left, y, viewport.right, y + itemHeight - dp(1))
+            val y = viewport.top + index * itemStride - nineKeySymbolScrollY
+            val box = RectF(viewport.left, y, viewport.right, y + itemHeight)
             key(canvas, box)
             fittedLabel(canvas, symbol, RectF(box).apply { offset(dp(3), 0f) }, 21f, white, false)
             val targetBox = RectF(box).apply { intersect(viewport) }
@@ -1388,43 +1447,117 @@ class WeikeKeyboardView(
         target(close) { candidateExpanded = false; invalidate() }
     }
 
+    /** Emoji panel categories. Kept to pre-Unicode-13 glyphs so every system font renders them. */
+    private val emojiCategories: List<Pair<String, List<String>>> = listOf(
+        "常用" to listOf("😀", "😂", "🥰", "😍", "😘", "😊", "🤣", "😉", "😭", "🥺", "😌", "😏", "🤔", "😅", "👍", "❤️", "💕", "🎉", "✨", "🌹", "🤩", "😜", "🤗", "😎", "🥳", "🙏", "💪", "💋", "🙈", "🎂", "🍻", "🌈", "🎁", "🔥", "💯", "😁", "😴", "🤝", "🌸", "☀️"),
+        "笑脸" to listOf("😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😙", "😋", "😛", "😜", "🤪", "😝", "🤗", "🤭", "🤫", "🤔", "🤐", "🤨", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🥵", "🥶", "😵", "🤯", "🥳", "😎", "🤓", "😕", "🙁", "😮", "😲", "😳", "🥺", "😢", "😭", "😱", "😤", "😡"),
+        "心情" to listOf("❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "💔", "❣️", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟", "💌", "💋", "🌹", "🥀", "💐", "🌷", "🌸", "💮", "🌺", "🌻", "🌼", "🍀", "🌿", "🍁", "🌙", "⭐", "🌟", "✨", "💫", "☀️", "🌈", "❄️", "🔥", "💤", "🎉", "🎊", "🎈", "🎁", "🎵", "🎶", "💎", "🏆"),
+        "手势" to listOf("👍", "👎", "👌", "✌️", "🤞", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇", "☝️", "✋", "🤚", "🖐️", "🖖", "👋", "🤝", "🙏", "💪", "✍️", "💅", "🤳", "👏", "🙌", "👐", "🤲", "👀", "👁️", "🧠", "🤠"),
+        "动物" to listOf("🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🙈", "🙉", "🙊", "🐒", "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞", "🐜", "🐢", "🐍", "🐙", "🦀"),
+        "食物" to listOf("🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🥑", "🥔", "🥕", "🌽", "🥒", "🍞", "🧀", "🍗", "🍖", "🍤", "🍳", "🍟", "🍕", "🌭", "🍔", "🌮", "🍜", "🍣", "🍭", "🍩", "🍪", "🎂", "🍰", "🍫", "🍬", "☕", "🍵", "🥤", "🍻"),
+        "符号" to listOf("✨", "⭐", "🌟", "💫", "⚡", "💥", "🔥", "🎉", "🎊", "🎈", "🎁", "🏆", "⚽", "🏀", "🎮", "🎵", "🎶", "💤", "💢", "💯", "❓", "❗", "✅", "❌", "⭕", "🚫", "♻️", "🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "⚫", "⚪", "🔒", "🔑", "📅", "⏰", "💰", "🎯", "💎")
+    )
+
     private fun drawEmojiKeyboard(canvas: Canvas) {
-        val emojis = listOf("😀", "😂", "🥰", "😍", "😘", "😊", "😉", "😭", "🥺", "😌", "😏", "🤔", "😅", "😡", "👍", "❤️", "💕", "🎉", "✨", "🌹")
         val top = dp(62)
+        val edge = dp(5)
         val gap = dp(7)
-        val columns = 5
-        val cellWidth = (width - dp(10) - gap * (columns - 1)) / columns
+        val bottom = contentBottom() - keyboardBottomReserve()
+        val tabHeight = dp(34)
+        val barHeight = dp(46)
+        // Category tabs across the top of the panel.
+        val tabCount = emojiCategories.size
+        val tabGap = dp(6)
+        val tabWidth = (width - edge * 2 - tabGap * (tabCount - 1)) / tabCount
+        emojiCategories.forEachIndexed { index, (name, _) ->
+            val left = edge + index * (tabWidth + tabGap)
+            val chip = RectF(left, top, left + tabWidth, top + tabHeight)
+            val active = index == emojiCategory
+            rounded(canvas, chip, chip.height() / 2f, if (active) accent else key)
+            centeredLabel(canvas, name, chip, 12f, if (active) Color.WHITE else muted, Paint.Align.CENTER)
+            target(chip, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+                if (emojiCategory != index) {
+                    emojiCategory = index
+                    emojiPage = 0
+                    invalidate()
+                }
+            }
+        }
+        // Paged emoji grid.
+        val gridTop = top + tabHeight + gap
+        val barTop = bottom - barHeight
         val rows = 4
-        val backHeight = dp(48)
-        val cellHeight = (contentBottom() - top - backHeight - gap * rows - keyboardBottomReserve()) / rows
-        emojis.forEachIndexed { index, emoji ->
+        val columns = 7
+        val gridGap = dp(4)
+        val cellWidth = (width - edge * 2 - gridGap * (columns - 1)) / columns
+        val cellHeight = (barTop - gap - gridTop - gridGap * (rows - 1)) / rows
+        val emojis = emojiCategories[emojiCategory].second
+        val perPage = rows * columns
+        val pages = ((emojis.size + perPage - 1) / perPage).coerceAtLeast(1)
+        emojiPage = emojiPage.coerceIn(0, pages - 1)
+        emojis.drop(emojiPage * perPage).take(perPage).forEachIndexed { index, emoji ->
             val row = index / columns
             val column = index % columns
-            val left = dp(5) + column * (cellWidth + gap)
-            val y = top + row * (cellHeight + gap)
+            val left = edge + column * (cellWidth + gridGap)
+            val y = gridTop + row * (cellHeight + gridGap)
             val box = RectF(left, y, left + cellWidth, y + cellHeight)
             key(canvas, box)
-            centeredLabel(canvas, emoji, box, 23f, white, Paint.Align.CENTER)
+            fittedLabel(canvas, emoji, box, 24f, white, false)
             target(box, keySound = true) { actions.typeEnglish(emoji) }
         }
-        val back = RectF(dp(5), contentBottom() - backHeight - keyboardBottomReserve(), width - dp(5), contentBottom() - keyboardBottomReserve())
+        // Bottom bar: back to letters, page control, emoji delete.
+        val backWidth = dp(76)
+        val back = RectF(edge, barTop + gap, edge + backWidth, bottom)
         key(canvas, back)
-        centeredLabel(canvas, "返回键盘", back, 15f, white, Paint.Align.CENTER)
+        centeredLabel(canvas, "返回键盘", back, 13f, white, Paint.Align.CENTER)
         target(back, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { emojiPanel = false; invalidate() }
+        val delete = RectF(width - edge - backWidth, barTop + gap, width - edge, bottom)
+        key(canvas, delete)
+        lucide(canvas, R.drawable.ic_lucide_delete, delete.centerX(), delete.centerY(), dp(22), white)
+        target(delete, repeat = true, keySound = true) { actions.backspace() }
+        if (pages > 1) {
+            val midLeft = back.right + gap
+            val midRight = delete.left - gap
+            val midCenter = (midLeft + midRight) / 2f
+            val prevBox = RectF(midLeft, barTop + gap, midCenter, bottom)
+            val nextBox = RectF(midCenter, barTop + gap, midRight, bottom)
+            if (emojiPage > 0) {
+                lucide(canvas, R.drawable.ic_lucide_chevron_left, midLeft + dp(18), (barTop + gap + bottom) / 2f, dp(16), muted)
+            }
+            if (emojiPage < pages - 1) {
+                lucide(canvas, R.drawable.ic_lucide_chevron_right, midRight - dp(18), (barTop + gap + bottom) / 2f, dp(16), muted)
+            }
+            val dotGap = dp(12)
+            val dotsWidth = dotGap * (pages - 1)
+            var dotX = midCenter - dotsWidth / 2f
+            val dotY = (barTop + gap + bottom) / 2f
+            paint.style = Paint.Style.FILL
+            for (pageIndex in 0 until pages) {
+                paint.color = if (pageIndex == emojiPage) accent else muted
+                canvas.drawCircle(dotX, dotY, if (pageIndex == emojiPage) dp(4) else dp(3), paint)
+                dotX += dotGap
+            }
+            target(prevBox, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+                if (emojiPage > 0) { emojiPage--; invalidate() }
+            }
+            target(nextBox, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+                if (emojiPage < pages - 1) { emojiPage++; invalidate() }
+            }
+        }
     }
 
     private fun letters(canvas: Canvas, chars: String, y: Float, h: Float, pinyin: Boolean, inset: Float, keyWidth: Float) {
-        val gap = dp(7)
+        val gap = dp(4)
         chars.forEachIndexed { index, character ->
             val x = inset + index * (keyWidth + gap)
             val box = RectF(x, y, x + keyWidth, y + h)
             key(canvas, box)
             val output = if (pinyin || uppercase) character.uppercaseChar().toString() else character.toString()
-            centeredLabel(canvas, output, box, keyLetterSize(if (pinyin) 23f else 25f), white, Paint.Align.CENTER)
-            target(box, keySound = true) {
+            centeredLabel(canvas, output, box, keyLetterSize(if (pinyin) 23f else if (uppercase) 23f else 25f), white, Paint.Align.CENTER)
+            target(box, keySound = true, previewLabel = output) {
                 if (pinyin) actions.typePinyin(character.toString()) else {
                     actions.typeEnglishLetter(output)
-                    if (automaticUppercase) {
+                    if (uppercase && !capsLock) {
                         uppercase = false
                         automaticUppercase = false
                         invalidate()
@@ -1435,24 +1568,35 @@ class WeikeKeyboardView(
     }
 
     private fun thirdRow(canvas: Canvas, y: Float, h: Float, pinyin: Boolean, keyWidth: Float) {
-        val gap = dp(7)
+        val gap = dp(4)
         val side = dp(43)
         val delete = dp(43)
         val chars = "zxcvbnm"
         val rowWidth = side + delete + keyWidth * chars.length + gap * (chars.length + 1)
         val edge = (width - rowWidth) / 2f
         val shift = RectF(edge, y, edge + side, y + h)
-        rounded(canvas, shift, dp(10), if (isPressed(shift)) pressedKey else specialKey)
+        // One-shot shift keeps the plain key look; caps lock stands out in accent.
+        val shiftBg = when {
+            capsLock -> accent
+            uppercase -> key
+            else -> if (isPressed(shift)) pressedKey else specialKey
+        }
+        rounded(canvas, shift, dp(10), shiftBg)
         if (pinyin) {
             centeredLabel(canvas, "'词", shift, 14f, white, Paint.Align.CENTER)
         } else {
-            val shiftIcon = if (uppercase) R.drawable.ic_lucide_arrow_big_up_dash else R.drawable.ic_lucide_arrow_big_up
-            lucide(canvas, shiftIcon, shift.centerX(), shift.centerY(), dp(20), white)
+            lucide(canvas, R.drawable.ic_lucide_arrow_big_up, shift.centerX(), shift.centerY(), dp(19), if (capsLock) Color.WHITE else white)
         }
         target(shift, keySound = true) {
             if (pinyin) actions.typePinyin("'") else {
-                uppercase = !uppercase
+                val now = SystemClock.elapsedRealtime()
+                when {
+                    capsLock -> { capsLock = false; uppercase = false }
+                    uppercase -> if (now - lastShiftTapAt < 380L) capsLock = true else uppercase = false
+                    else -> uppercase = true
+                }
                 automaticUppercase = false
+                lastShiftTapAt = now
                 invalidate()
             }
         }
@@ -1461,11 +1605,11 @@ class WeikeKeyboardView(
             val box = RectF(x, y, x + keyWidth, y + h)
             key(canvas, box)
             val output = if (pinyin || uppercase) character.uppercaseChar().toString() else character.toString()
-            centeredLabel(canvas, output, box, keyLetterSize(if (pinyin) 23f else 25f), white, Paint.Align.CENTER)
-            target(box, keySound = true) {
+            centeredLabel(canvas, output, box, keyLetterSize(if (pinyin) 23f else if (uppercase) 23f else 25f), white, Paint.Align.CENTER)
+            target(box, keySound = true, previewLabel = output) {
                 if (pinyin) actions.typePinyin(character.toString()) else {
                     actions.typeEnglishLetter(output)
-                    if (automaticUppercase) {
+                    if (uppercase && !capsLock) {
                         uppercase = false
                         automaticUppercase = false
                         invalidate()
@@ -1479,13 +1623,12 @@ class WeikeKeyboardView(
         target(
             back,
             repeat = true,
-            keySound = true,
-            longPressAction = { actions.clearComposition() }
+            keySound = true
         ) { actions.backspace() }
     }
 
     private fun bottomRow(canvas: Canvas, y: Float, h: Float, pinyin: Boolean, keyWidth: Float) {
-        val gap = dp(7)
+        val gap = dp(4)
         val edge = dp(5)
         val numberWidth = dp(48)
         val emojiWidth = dp(40)
@@ -1520,7 +1663,7 @@ class WeikeKeyboardView(
         centeredLabel(canvas, "中/EN", language, 11f, white, Paint.Align.CENTER)
         centeredLabel(canvas, "恋爱键盘", space, 14f, muted, Paint.Align.CENTER)
         centeredLabel(canvas, if (pinyin) "\u62fc" else "EN", RectF(space.right - dp(32), space.top, space.right - dp(6), space.bottom), 12f, muted, Paint.Align.CENTER)
-        centeredLabel(canvas, "发送", enter, 14f, Color.WHITE, Paint.Align.CENTER)
+        centeredLabel(canvas, enterLabel, enter, 14f, Color.WHITE, Paint.Align.CENTER)
         target(number, hapticFeedback = null) { actions.toggleSymbols() }
         target(emoji, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             emojiPanel = true; candidateExpanded = false; invalidate()
@@ -1558,25 +1701,37 @@ class WeikeKeyboardView(
         val keyHeight = (contentBottom() - top - dp(9) - keyboardBottomReserve() - gap * 3) / 4f
         val edge = dp(5)
         val symbolWidth = (width - edge * 2 - dp(7) * 9) / 10f
-        val chineseSymbols = !symbolsUseEnglish
-        symbolsRow(canvas, "1234567890", top, keyHeight, symbolWidth, chineseSymbols)
-        symbolsRow(canvas, "-/:;()$&@", top + keyHeight + gap, keyHeight, symbolWidth, chineseSymbols)
-        symbolsRow(canvas, ".,?!'\"[]", top + (keyHeight + gap) * 2, keyHeight, symbolWidth, chineseSymbols)
+        // Page 0 keeps the classic number/punctuation set; page 1 adds the CJK
+        // brackets and typographic marks users reach for most in chat.
+        val symbolPages = listOf(
+            listOf("1234567890", "-/:;()$&@", ".,?!'\"[]"),
+            listOf("《》〈〉「」『』【】", "〔〕〖〗·～…—￥", "%‰℃℉°№※◎→√")
+        )
+        symbolsPage = symbolsPage.coerceIn(0, symbolPages.size - 1)
+        val chineseSymbols = !symbolsUseEnglish && symbolsPage == 0
+        symbolPages[symbolsPage].forEachIndexed { rowIndex, row ->
+            symbolsRow(canvas, row, top + (keyHeight + gap) * rowIndex, keyHeight, symbolWidth, chineseSymbols)
+        }
         val y = top + (keyHeight + gap) * 3
         val controlWidth = symbolWidth * 2 + dp(7)
         val number = RectF(edge, y, edge + controlWidth, y + keyHeight)
+        val pageKeyWidth = dp(44)
+        val pageKey = RectF(number.right + dp(7), y, number.right + dp(7) + pageKeyWidth, y + keyHeight)
         val enter = RectF(width - edge - controlWidth, y, width - edge, y + keyHeight)
         val deleteWidth = dp(43)
         val delete = RectF(enter.left - dp(7) - deleteWidth, y, enter.left - dp(7), y + keyHeight)
-        val space = RectF(number.right + dp(7), y, delete.left - dp(7), y + keyHeight)
+        val space = RectF(pageKey.right + dp(7), y, delete.left - dp(7), y + keyHeight)
         key(canvas, number)
+        key(canvas, pageKey)
         key(canvas, space)
         key(canvas, delete)
         rounded(canvas, enter, dp(10), white)
         centeredLabel(canvas, "ABC", number, 19f, white, Paint.Align.CENTER)
+        centeredLabel(canvas, "${symbolsPage + 1}/${symbolPages.size}", pageKey, 14f, white, Paint.Align.CENTER)
         lucide(canvas, R.drawable.ic_lucide_delete, delete.centerX(), delete.centerY(), dp(23), white)
         lucide(canvas, R.drawable.ic_lucide_move_right, enter.centerX(), enter.centerY(), dp(21), actionIcon)
         target(number, hapticFeedback = null) { actions.toggleSymbols() }
+        target(pageKey, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { symbolsPage = 1 - symbolsPage; invalidate() }
         target(space, keySound = true) { actions.typeEnglish(" ") }
         target(delete, repeat = true, keySound = true) { actions.backspace() }
         target(enter, keySound = true, longPressAction = { actions.newline() }) { actions.enter() }
@@ -1603,7 +1758,7 @@ class WeikeKeyboardView(
             val box = RectF(x, y, x + keyWidth, y + h)
             key(canvas, box)
             centeredLabel(canvas, character.toString(), box, 23f, white, Paint.Align.CENTER)
-            target(box, keySound = true) { actions.typeEnglish(character.toString()) }
+            target(box, keySound = true, previewLabel = character.toString()) { actions.typeEnglish(character.toString()) }
         }
     }
 
@@ -1738,7 +1893,7 @@ class WeikeKeyboardView(
         paint.style = Paint.Style.FILL
         paint.color = color
         paint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-        paint.textSize = dp(size.toInt())
+        paint.textSize = sp(size.toInt())
         paint.textAlign = align
         paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         canvas.drawText(value, x, y, paint)
@@ -1748,7 +1903,7 @@ class WeikeKeyboardView(
     private fun centeredLabel(canvas: Canvas, value: String, box: RectF, size: Float, color: Int, align: Paint.Align) {
         paint.style = Paint.Style.FILL
         paint.color = color
-        paint.textSize = dp(size.toInt())
+        paint.textSize = sp(size.toInt())
         paint.textAlign = align
         paint.typeface = Typeface.DEFAULT
         val baseline = box.centerY() - (paint.ascent() + paint.descent()) / 2f
@@ -1892,9 +2047,10 @@ class WeikeKeyboardView(
         longPressAction: (() -> Unit)? = null,
         swipeUpAction: (() -> Unit)? = null,
         releaseAction: (() -> Unit)? = null,
+        previewLabel: String? = null,
         action: () -> Unit
     ) {
-        targets += TouchTarget(box, enabled, repeat, hold, keySound, hapticFeedback, longPressAction, swipeUpAction, releaseAction, action)
+        targets += TouchTarget(box, enabled, repeat, hold, keySound, hapticFeedback, longPressAction, swipeUpAction, releaseAction, previewLabel, action)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -2092,7 +2248,7 @@ class WeikeKeyboardView(
                         invalidate()
                         return true
                     }
-                    if (active != null && !active.box.contains(event.x, event.y)) {
+                    if (active != null && !hitsWithSlop(active.box, event.x, event.y)) {
                         activeTargetCancelled = true
                         pressedBox = null
                         pressedPointers.remove(primaryPointerId)
@@ -2108,7 +2264,7 @@ class WeikeKeyboardView(
                 val pointerId = event.getPointerId(pointerIndex)
                 val target = secondaryTouches.remove(pointerId)
                 val cancelled = cancelledSecondaryTouches.remove(pointerId)
-                if (target != null && !cancelled && target.box.contains(event.getX(pointerIndex), event.getY(pointerIndex)) &&
+                if (target != null && !cancelled && hitsWithSlop(target.box, event.getX(pointerIndex), event.getY(pointerIndex)) &&
                     (!target.repeat || actions.canBackspace())) {
                     if (pointerId == primaryPointerId && longPressTriggered) {
                         target.releaseAction?.invoke()
@@ -2222,7 +2378,7 @@ class WeikeKeyboardView(
                 val pointerId = event.getPointerId(event.actionIndex)
                 val active = secondaryTouches.remove(pointerId) ?: activeTarget
                 val cancelled = cancelledSecondaryTouches.remove(pointerId) || activeTargetCancelled
-                val releasedOnOriginalTarget = !cancelled && active?.box?.contains(event.x, event.y) == true
+                val releasedOnOriginalTarget = !cancelled && active?.let { hitsWithSlop(it.box, event.x, event.y) } == true
                 postDelayed({ pressedBox = null; invalidate() }, 32L)
                 if (longPressTriggered) {
                     active?.releaseAction?.invoke()
@@ -2283,6 +2439,16 @@ class WeikeKeyboardView(
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
+        // Pending key-repeat / long-press callbacks must never fire once the
+        // keyboard surface is gone.
+        removeCallbacks(repeatBackspace)
+        removeCallbacks(longPressRunnable)
+        repeatAction = null
+        repeatHaptic = null
+        activeTarget = null
+        pressedBox = null
+        candidateVelocityTracker?.recycle()
+        candidateVelocityTracker = null
     }
 
     override fun computeScroll() {
@@ -2345,6 +2511,8 @@ class WeikeKeyboardView(
     }
 
     private fun dp(value: Int): Float = value * resources.displayMetrics.density
+    private val fontScale: Float get() = resources.configuration.fontScale.coerceIn(1f, 1.3f)
+    private fun sp(value: Int): Float = dp(value) * fontScale
 
     private fun selectModeAt(x: Float, emitFeedback: Boolean) {
         val tabs = modeTabs ?: return
@@ -2393,6 +2561,12 @@ class WeikeKeyboardView(
     private fun topModeFor(mode: KeyboardMode, options: List<KeyboardMode>): KeyboardMode =
         if (mode in listOf(KeyboardMode.PINYIN, KeyboardMode.ENGLISH) && KeyboardMode.TEXT in options) KeyboardMode.TEXT else mode
     private fun isActive(state: VoiceUiState) = state == VoiceUiState.Listening
+    /** Hit test with a small slop so fast, slightly-sliding taps still register. */
+    private fun hitsWithSlop(box: RectF, x: Float, y: Float): Boolean {
+        val slop = dp(6)
+        return x >= box.left - slop && x <= box.right + slop &&
+            y >= box.top - slop && y <= box.bottom + slop
+    }
     private fun isPressed(box: RectF): Boolean =
         sameBox(pressedBox, box) || pressedPointers.values.any { sameBox(it, box) }
     private fun sameBox(first: RectF?, second: RectF?): Boolean = first != null && second != null &&
@@ -2408,6 +2582,7 @@ class WeikeKeyboardView(
         val longPressAction: (() -> Unit)?,
         val swipeUpAction: (() -> Unit)?,
         val releaseAction: (() -> Unit)?,
+        val previewLabel: String?,
         val action: () -> Unit
     )
 

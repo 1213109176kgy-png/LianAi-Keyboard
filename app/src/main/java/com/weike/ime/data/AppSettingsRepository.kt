@@ -122,7 +122,7 @@ class AppSettingsRepository(private val context: Context) {
     }
     val chineseKeyboardLayout = context.settingsDataStore.data.map { prefs ->
         runCatching { ChineseKeyboardLayout.valueOf(prefs[chineseKeyboardLayoutKey].orEmpty()) }
-            .getOrDefault(ChineseKeyboardLayout.FULL)
+            .getOrDefault(ChineseKeyboardLayout.NINE_KEY)
     }
     val nineKeySymbols = context.settingsDataStore.data.map { prefs ->
         decodeNineKeySymbols(prefs[nineKeySymbolsKey].orEmpty())
@@ -317,7 +317,7 @@ class AppSettingsRepository(private val context: Context) {
             ?: KeyboardTheme.LIGHT
         val layout = startupPreferences.getString(STARTUP_CHINESE_LAYOUT, null)
             ?.let { runCatching { ChineseKeyboardLayout.valueOf(it) }.getOrNull() }
-            ?: ChineseKeyboardLayout.FULL
+            ?: ChineseKeyboardLayout.NINE_KEY
         val modes = decodeKeyboardModes(startupPreferences.getString(STARTUP_MODES, null).orEmpty())
         val haptic = HapticStrength.entries.firstOrNull {
             it.storedValue == startupPreferences.getInt(STARTUP_HAPTIC, HapticStrength.MEDIUM.storedValue)
@@ -344,7 +344,7 @@ class AppSettingsRepository(private val context: Context) {
         val theme = runCatching { KeyboardTheme.valueOf(prefs[keyboardThemeKey].orEmpty()) }
             .getOrDefault(KeyboardTheme.LIGHT)
         val layout = runCatching { ChineseKeyboardLayout.valueOf(prefs[chineseKeyboardLayoutKey].orEmpty()) }
-            .getOrDefault(ChineseKeyboardLayout.FULL)
+            .getOrDefault(ChineseKeyboardLayout.NINE_KEY)
         val modes = decodeKeyboardModes(prefs[keyboardModesKey].orEmpty())
         val haptic = HapticStrength.entries.firstOrNull { it.storedValue == prefs[hapticStrengthKey] }
             ?: HapticStrength.MEDIUM

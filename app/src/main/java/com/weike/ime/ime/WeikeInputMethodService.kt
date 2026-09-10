@@ -130,7 +130,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private var keyboardTheme = KeyboardTheme.DARK
     private var keyboardThemePreference = KeyboardTheme.DARK
     private var expressionOptimization = false
-    private var chineseKeyboardLayout = ChineseKeyboardLayout.FULL
+    private var chineseKeyboardLayout = ChineseKeyboardLayout.NINE_KEY
     private var nineKeySymbols = AppSettingsRepository.DEFAULT_NINE_KEY_SYMBOLS
     private var pinyinBuffer = ""
     // Unlike pinyinBuffer this keeps the actual decoder code. They differ for T9:
@@ -203,7 +203,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 false, candidateTextSizeLevel, englishAutoCapitalize, shouldAutoCapitalizeEnglish(), keyboardLogo,
                 currentRecentClipboard(), keyboardHeightLevel, keyboardBottomOffsetLevel, punctuationShortcuts,
                 cursorSliderEnabled, polishDraft, polishCursor, polishOptions, polishLoading,
-                replyOptions, replyLoading, replyEmotion
+                replyOptions, replyLoading, replyEmotion, enterActionLabel()
             )
         }
     }
@@ -906,7 +906,19 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 commitCurrentPinyin()
                 applyMode(mode)
             }
-        } else applyMode(mode)
+        } else {
+            if (this.mode == KeyboardMode.ENGLISH && englishBuffer.isNotEmpty()) {
+                // Commit unfinished letters before leaving ENGLISH, otherwise the
+                // composing region is dropped by the next commitText and the
+                // typed letters silently vanish.
+                val carried = englishBuffer
+                englishBuffer = ""
+                englishCandidates = emptyList()
+                updateComposingText("")
+                commitTextAndPredict(carried)
+            }
+            applyMode(mode)
+        }
     }
 
     override fun closeKeyboard() {
@@ -2156,7 +2168,38 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (mode == KeyboardMode.PINYIN && (pinyinRawBuffer.isNotBlank() || pendingPinyinMutations > 0)) {
             enqueueAfterPendingPinyin { commitRawPinyin() }
         } else {
-            finishCompositionThen { currentInputConnection?.performEditorAction(EditorInfo.IME_ACTION_SEND) }
+            finishCompositionThen { performEnterForField() }
+        }
+    }
+
+    /**
+     * The enter key used to hard-code IME_ACTION_SEND, which silently did
+     * nothing in search bars and login forms. Follow the focused field's
+     * declared action instead and only fall back to send for plain fields.
+     */
+    private fun performEnterForField() {
+        val info = currentInputEditorInfo
+        val noEnterAction = info == null || (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
+        val action = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
+        if (noEnterAction || action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
+            currentInputConnection?.commitText("\n", 1)
+        } else {
+            currentInputConnection?.performEditorAction(action)
+        }
+    }
+
+    private fun enterActionLabel(): String {
+        val info = currentInputEditorInfo ?: return "发送"
+        info.actionLabel?.takeIf { it.isNotBlank() }?.let { return it.toString() }
+        val noEnterAction = (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
+        val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
+        return when {
+            noEnterAction || action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED -> "换行"
+            action == EditorInfo.IME_ACTION_GO -> "前往"
+            action == EditorInfo.IME_ACTION_SEARCH -> "搜索"
+            action == EditorInfo.IME_ACTION_NEXT -> "下一步"
+            action == EditorInfo.IME_ACTION_DONE -> "完成"
+            else -> "发送"
         }
     }
 
@@ -2186,7 +2229,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         val toggle = {
             clearPredictions()
             mode = if (mode == KeyboardMode.SYMBOLS) modeBeforeSymbols else {
-                modeBeforeSymbols = if (mode == KeyboardMode.PINYIN) KeyboardMode.PINYIN else KeyboardMode.ENGLISH
+                // Remember the exact mode we came from so returning from the
+                // symbol page restores VOICE/ASK/CLIPBOARD instead of falling
+                // back to ENGLISH.
+                modeBeforeSymbols = mode
                 KeyboardMode.SYMBOLS
             }
             render()

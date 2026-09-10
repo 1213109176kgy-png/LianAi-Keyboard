@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -164,7 +165,7 @@ class MainActivity : AppCompatActivity() {
             }
             icon.scaleType = ImageView.ScaleType.CENTER_INSIDE
             addView(icon, LayoutParams(dp(context, 22), dp(context, 22)))
-            label.textSize = 16f
+            label.textSize = 14f
             label.gravity = Gravity.CENTER_VERTICAL
             label.setPadding(dp(context, 10), 0, dp(context, 6), 0)
             addView(label, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
@@ -204,7 +205,7 @@ class MainActivity : AppCompatActivity() {
             val search = EditText(context).apply {
                 hint = "搜索模型厂商"
                 setSingleLine(true)
-                textSize = 15f
+                textSize = 14f
                 setTextColor(ContextCompat.getColor(context, R.color.weike_text))
                 setHintTextColor(ContextCompat.getColor(context, R.color.weike_muted))
                 background = android.graphics.drawable.GradientDrawable().apply {
@@ -268,7 +269,7 @@ class MainActivity : AppCompatActivity() {
             }, LayoutParams(dp(context, 25), dp(context, 25)))
             addView(TextView(context).apply {
                 text = provider.displayName
-                textSize = 15f
+                textSize = 14f
                 gravity = Gravity.CENTER_VERTICAL
                 setTextColor(ContextCompat.getColor(context, R.color.weike_text))
                 setPadding(dp(context, 11), 0, 0, 0)
@@ -542,7 +543,7 @@ class MainActivity : AppCompatActivity() {
     private var latestNineKeySymbols: List<String> = emptyList()
     private var dragHighlight: View? = null
     private var dragSource: View? = null
-    private val pagePrimary = Color.rgb(255, 107, 157)
+    private val pagePrimary: Int get() = getColor(R.color.weike_accent)
     private val managementLogoBlue = Color.rgb(0, 55, 85)
     private val appVersionName: String by lazy {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "未知版本"
@@ -605,6 +606,23 @@ class MainActivity : AppCompatActivity() {
         if (page != Page.ACCOUNT) showPage(parentPage(page)) else super.onBackPressed()
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_DOWN) {
+            hideKeyboardWhenTouchingOutsideFocusedInput(event)
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun hideKeyboardWhenTouchingOutsideFocusedInput(event: MotionEvent) {
+        val focusedInput = currentFocus as? EditText ?: return
+        val inputBounds = Rect()
+        focusedInput.getGlobalVisibleRect(inputBounds)
+        if (inputBounds.contains(event.rawX.toInt(), event.rawY.toInt())) return
+        focusedInput.clearFocus()
+        getSystemService(InputMethodManager::class.java)
+            .hideSoftInputFromWindow(focusedInput.windowToken, 0)
+    }
+
     private fun buildShell(): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundColor(getColor(R.color.weike_background))
@@ -615,8 +633,8 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(10), dp(7), dp(10), dp(7))
             background = GradientDrawable().apply {
-                setColor(Color.WHITE)
-                setStroke(dp(1), Color.rgb(255, 229, 236))
+                setColor(getColor(R.color.weike_panel))
+                setStroke(dp(1), getColor(R.color.weike_key))
             }
             addView(bottomNavItem(R.drawable.ic_lucide_house, "首页", Page.ACCOUNT), LinearLayout.LayoutParams(0, dp(58), 1f))
             addView(bottomNavItem(R.drawable.ic_lucide_keyboard, "键盘", Page.TEST), LinearLayout.LayoutParams(0, dp(58), 1f))
@@ -698,7 +716,7 @@ class MainActivity : AppCompatActivity() {
             })
             addView(TextView(this@MainActivity).apply {
                 text = "恋爱键盘"
-                textSize = 21f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(getColor(R.color.weike_text))
                 setPadding(dp(8), 0, 0, 0)
@@ -713,13 +731,13 @@ class MainActivity : AppCompatActivity() {
             ).apply { cornerRadius = dp(24).toFloat() }
             addView(TextView(this@MainActivity).apply {
                 text = "让聊天更有爱 💕"
-                textSize = 25f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(Color.WHITE)
             })
             addView(TextView(this@MainActivity).apply {
                 text = "AI助你成为恋爱高手，每一句话都充满魅力"
-                textSize = 15f
+                textSize = 12f
                 setTextColor(Color.argb(235, 255, 255, 255))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
             })
@@ -750,7 +768,7 @@ class MainActivity : AppCompatActivity() {
         addView(TextView(this@MainActivity).apply {
             text = "个人中心"
             gravity = Gravity.CENTER
-            textSize = 20f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.weike_text))
             setPadding(0, dp(8), 0, dp(18))
@@ -772,13 +790,13 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(14), 0, 0, 0)
                 addView(TextView(this@MainActivity).apply {
                     text = "恋爱达人"
-                    textSize = 20f
+                    textSize = 14f
                     typeface = Typeface.DEFAULT_BOLD
                     setTextColor(Color.WHITE)
                 })
                 addView(TextView(this@MainActivity).apply {
                     text = "恋爱键盘 · 让每一句话都充满温度"
-                    textSize = 13f
+                    textSize = 12f
                     setTextColor(Color.argb(225, 255, 255, 255))
                 })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -849,7 +867,7 @@ class MainActivity : AppCompatActivity() {
             hint = "在这里试试拼音、英文、语音和润色"
             setTextColor(getColor(R.color.weike_text))
             setHintTextColor(getColor(R.color.weike_muted))
-            textSize = 17f
+            textSize = 14f
             gravity = Gravity.TOP or Gravity.START
             minLines = 7
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
@@ -1016,7 +1034,7 @@ class MainActivity : AppCompatActivity() {
             "未开启的模式不会出现在可选列表中"
         )) {
             val value = TextView(this@MainActivity).apply {
-                textSize = 16f
+                textSize = 14f
                 gravity = Gravity.CENTER_VERTICAL
                 setTextColor(getColor(R.color.weike_text))
                 background = roundedBackground(getColor(R.color.weike_key), 13)
@@ -1134,10 +1152,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildOptimizeInput(): View = screen {
+        addView(subpageHeader("优化输入") { showPage(Page.SETTINGS) })
         addView(section("离线词典增强"))
         addView(enhancedDictionaryCard())
         addView(wanxiangGrammarCard(), margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
-        addView(subpageHeader("优化输入") { showPage(Page.SETTINGS) })
         addView(primaryButton("添加词条") { showAddDictionaryDialog() })
         addView(section("专业词库"))
         lexiconList = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
@@ -1193,15 +1211,15 @@ class MainActivity : AppCompatActivity() {
             })
         })
         microphoneStatus = TextView(this@MainActivity).apply {
-            textSize = 15f
+            textSize = 12f
             layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 14)
         }
         addView(microphoneStatus)
     }
 
     private fun buildCloudConfiguration(): View = screen {
-        addView(subpageHeader("大模型配置") { showPage(cloudReturnPage) })
-        addView(section("文本模型"))
+        addView(cloudSubpageHeader("大模型配置") { showPage(cloudReturnPage) })
+        addView(cloudSection("文本模型"))
         addView(providerConfigurationCard(
             isAsr = false,
             load = { container.settings.cloudApiSettings.first().text },
@@ -1209,40 +1227,24 @@ class MainActivity : AppCompatActivity() {
             save = { config, provider -> container.settings.saveTextApi(config, provider) },
             test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() }
         ))
-        addView(section("帮你回提示词"))
+        addView(cloudSection("帮你回提示词"))
         addView(card().apply {
-            addView(TextView(this@MainActivity).apply {
-                text = "定义 AI 以谁的角度回复、回复什么内容。该提示词会作为系统提示词发送给文本模型。"
-                textSize = 14f
-                setTextColor(getColor(R.color.weike_muted))
-                setLineSpacing(dp(3).toFloat(), 1f)
-            })
-            val promptInput = EditText(this@MainActivity).apply {
-                hint = "输入帮你回的系统提示词"
-                minLines = 8
-                maxLines = 14
-                gravity = Gravity.TOP or Gravity.START
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                setTextColor(getColor(R.color.weike_text))
-                setHintTextColor(getColor(R.color.weike_muted))
-                background = GradientDrawable().apply {
-                    setColor(getColor(R.color.weike_panel))
-                    cornerRadius = dp(14).toFloat()
-                    setStroke(dp(1), getColor(R.color.weike_key))
-                }
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 14)
-            }
+            addView(cloudHelpText("定义 AI 以谁的角度回复、回复什么内容。该提示词会作为系统提示词发送给文本模型。"))
+            val promptInput = promptTextField("输入帮你回的系统提示词", minLines = 4, maxLines = 6, top = 12)
             addView(promptInput)
             val actions = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
-                addView(formActionButton("恢复默认", false) {
+                addView(compactFormActionButton("恢复默认", false) {
                     promptInput.setText(AppSettingsRepository.DEFAULT_REPLY_PROMPT)
                 })
-                addView(formActionButton("保存提示词", true) {
+                addView(compactFormActionButton("保存提示词", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveReplyPrompt(promptInput.text.toString()) }
-                            .onSuccess { Toast.makeText(this@MainActivity, "帮你回提示词已保存", Toast.LENGTH_SHORT).show() }
+                            .onSuccess {
+                                promptInput.setText(container.settings.replyPrompt())
+                                Toast.makeText(this@MainActivity, "帮你回提示词已保存", Toast.LENGTH_SHORT).show()
+                            }
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
                 })
@@ -1251,34 +1253,17 @@ class MainActivity : AppCompatActivity() {
             addView(actions)
             lifecycleScope.launch { promptInput.setText(container.settings.replyPrompt()) }
         })
-        addView(section("超会说关系提示词"))
+        addView(cloudSection("超会说关系提示词"))
         addView(card().apply {
-            addView(TextView(this@MainActivity).apply {
-                text = "为每一种聊天对象配置独立的系统提示词。键盘选择关系后，AI会自动使用对应配置。"
-                textSize = 14f
-                setTextColor(getColor(R.color.weike_muted))
-                setLineSpacing(dp(3).toFloat(), 1f)
-            })
+            addView(cloudHelpText("为每一种聊天对象配置独立的系统提示词。键盘选择关系后，AI会自动使用对应配置。"))
             val relations = AppSettingsRepository.RELATION_TYPES
             var prompts = AppSettingsRepository.DEFAULT_RELATION_PROMPTS
             var selectedRelation = relations.first()
             val relationSelector = settingsSpinner(relations).apply {
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(52), top = 12)
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 10)
             }
             addView(relationSelector)
-            val relationPromptInput = EditText(this@MainActivity).apply {
-                hint = "输入该关系的系统提示词"
-                minLines = 5
-                maxLines = 10
-                gravity = Gravity.TOP or Gravity.START
-                setPadding(dp(14), dp(12), dp(14), dp(12))
-                setTextColor(getColor(R.color.weike_text))
-                setHintTextColor(getColor(R.color.weike_muted))
-                background = GradientDrawable().apply {
-                    setColor(getColor(R.color.weike_panel)); cornerRadius = dp(14).toFloat(); setStroke(dp(1), getColor(R.color.weike_key))
-                }
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10)
-            }
+            val relationPromptInput = promptTextField("输入该关系的系统提示词", minLines = 3, maxLines = 6, top = 10)
             addView(relationPromptInput)
             relationSelector.onItemSelectedListener = simpleSelection { index ->
                 selectedRelation = relations[index]
@@ -1287,14 +1272,15 @@ class MainActivity : AppCompatActivity() {
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
-                addView(formActionButton("恢复默认", false) {
+                addView(compactFormActionButton("恢复默认", false) {
                     relationPromptInput.setText(AppSettingsRepository.DEFAULT_RELATION_PROMPTS.getValue(selectedRelation))
                 })
-                addView(formActionButton("保存当前关系", true) {
+                addView(compactFormActionButton("保存当前关系", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveRelationPrompt(selectedRelation, relationPromptInput.text.toString()) }
                             .onSuccess {
                                 prompts = container.settings.relationPrompts()
+                                relationPromptInput.setText(prompts.getValue(selectedRelation))
                                 Toast.makeText(this@MainActivity, "$selectedRelation 提示词已保存", Toast.LENGTH_SHORT).show()
                             }
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
@@ -1307,7 +1293,7 @@ class MainActivity : AppCompatActivity() {
                 relationPromptInput.setText(prompts.getValue(selectedRelation))
             }
         })
-        addView(section("其他配置"))
+        addView(cloudSection("其他配置"))
         addView(collapsibleAsrConfiguration())
     }
 
@@ -1341,7 +1327,7 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(dp(20), dp(20)))
             addView(TextView(this@MainActivity).apply {
                 text = "ASR 接口（暂时用不到，不用填）"
-                textSize = 15f
+                textSize = 14f
                 setTextColor(getColor(R.color.weike_text))
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(10), 0, dp(8), 0)
@@ -1359,8 +1345,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildSettingsHub(): View = screen {
-        addView(subpageHeader("设置") { showPage(Page.PROFILE) })
-        addView(section("键盘设置"))
+        addView(settingsHubHeader("设置") { showPage(Page.PROFILE) })
+        addView(settingsHubSection("键盘设置"))
         addView(managementTileRow(
             managementTile("布局和显示", "主题与候选词", R.drawable.ic_lucide_layout_dashboard) { showPage(Page.LAYOUT) },
             managementTile("按键效果", "声音与触感", R.drawable.ic_lucide_zap) { showPage(Page.KEY_EFFECTS) }
@@ -1368,25 +1354,24 @@ class MainActivity : AppCompatActivity() {
         addView(managementTileRow(
             managementTile("辅助输入", "标点与英文", R.drawable.ic_lucide_sliders_horizontal) { showPage(Page.AUXILIARY_INPUT) },
             managementTile("键盘管理", "布局与模式", R.drawable.ic_lucide_keyboard) { showPage(Page.KEYBOARD_MANAGEMENT) }
-        ), margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(156), top = 12))
-        addView(section("AI 与数据"))
+        ), margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(120), top = 10))
+        addView(settingsHubSection("AI 与数据"))
         addView(managementTileRow(
             managementTile("大模型配置", "接口、模型与提示词", R.drawable.ic_lucide_cloud) {
                 cloudReturnPage = Page.SETTINGS
                 showPage(Page.CLOUD)
             },
-            managementTile("优化输入", "词典与文风", R.drawable.ic_lucide_book_open) { showPage(Page.OPTIMIZE_INPUT) }
+            managementTile("优化输入", "词典与文风", R.drawable.ic_lucide_wand_sparkles) { showPage(Page.OPTIMIZE_INPUT) }
         ))
         addView(managementTileRow(
-            managementTile("剪贴板", "本机历史", R.drawable.ic_lucide_clipboard) { showPage(Page.CLIPBOARD_SETTINGS) },
+            managementTile("剪贴板", "本机历史", R.drawable.ic_lucide_clipboard_list) { showPage(Page.CLIPBOARD_SETTINGS) },
             managementTile("本机数据", "历史与学习", R.drawable.ic_lucide_history) { showPage(Page.LOCAL_DATA) }
-        ), margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(156), top = 12))
-        addView(section("其他"))
-        addView(card().apply {
-            addView(actionRow("权限管理", "") { showPage(Page.PERMISSION_MANAGEMENT) })
-            addDivider(this)
-            addView(actionRow("关于与帮助", "") { showPage(Page.ABOUT) })
-        })
+        ), margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(120), top = 10))
+        addView(settingsHubSection("其他"))
+        addView(managementTileRow(
+            managementTile("权限管理", "输入法、录音与悬浮窗", R.drawable.ic_lucide_shield_check) { showPage(Page.PERMISSION_MANAGEMENT) },
+            managementTile("关于与帮助", "开发者与使用指引", R.drawable.ic_lucide_circle_help) { showPage(Page.ABOUT) }
+        ))
     }
 
     private fun bottomNavItem(icon: Int, label: String, target: Page) = LinearLayout(this).apply {
@@ -1419,7 +1404,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(color)
                 typeface = if (active) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             }
-            item.background = if (active) roundedBackground(Color.rgb(255, 240, 245), 16) else null
+            item.background = if (active) roundedBackground(getColor(R.color.weike_key), 16) else null
         }
     }
 
@@ -1427,9 +1412,9 @@ class MainActivity : AppCompatActivity() {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(16), dp(14), dp(14), dp(14))
         background = GradientDrawable().apply {
-            setColor(Color.WHITE)
+            setColor(getColor(R.color.weike_panel))
             cornerRadius = dp(18).toFloat()
-            setStroke(dp(1), Color.rgb(255, 229, 236))
+            setStroke(dp(1), getColor(R.color.weike_key))
         }
         addView(ImageView(this@MainActivity).apply {
             setImageResource(icon)
@@ -1442,13 +1427,13 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(14), 0, dp(8), 0)
             addView(TextView(this@MainActivity).apply {
                 text = title
-                textSize = 17f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(getColor(R.color.weike_text))
             })
             addView(TextView(this@MainActivity).apply {
                 text = detail
-                textSize = 13f
+                textSize = 12f
                 setTextColor(getColor(R.color.weike_muted))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 4)
             })
@@ -1469,7 +1454,7 @@ class MainActivity : AppCompatActivity() {
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, 0, 0)
-            addView(TextView(this@MainActivity).apply { text = title; textSize = 15f; typeface = Typeface.DEFAULT_BOLD; setTextColor(getColor(R.color.weike_text)) })
+            addView(TextView(this@MainActivity).apply { text = title; textSize = 14f; typeface = Typeface.DEFAULT_BOLD; setTextColor(getColor(R.color.weike_text)) })
             addView(TextView(this@MainActivity).apply { text = detail; textSize = 12f; setTextColor(getColor(R.color.weike_muted)) })
         }, LinearLayout.LayoutParams(0, dp(54), 1f))
         addView(ImageView(this@MainActivity).apply {
@@ -1487,13 +1472,13 @@ class MainActivity : AppCompatActivity() {
         addView(card().apply {
             addView(TextView(this@MainActivity).apply {
                 text = "开发者：邝广元"
-                textSize = 20f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(getColor(R.color.weike_text))
             })
             addView(TextView(this@MainActivity).apply {
                 text = "下面是我的微信，欢迎添加我为好友，一起沟通交流恋爱键盘的使用体验、建议和想法。"
-                textSize = 15f
+                textSize = 12f
                 setLineSpacing(dp(4).toFloat(), 1f)
                 setTextColor(getColor(R.color.weike_muted))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
@@ -1509,7 +1494,7 @@ class MainActivity : AppCompatActivity() {
         addView(card().apply {
             addView(TextView(this@MainActivity).apply {
                 text = "如果你觉得这个项目对你有帮助，欢迎随缘打赏。感谢你的支持与鼓励。"
-                textSize = 15f
+                textSize = 12f
                 setLineSpacing(dp(4).toFloat(), 1f)
                 setTextColor(getColor(R.color.weike_text))
             })
@@ -1526,7 +1511,7 @@ class MainActivity : AppCompatActivity() {
         contentDescription = description
         adjustViewBounds = true
         scaleType = ImageView.ScaleType.FIT_CENTER
-        background = roundedBackground(Color.WHITE, 16)
+        background = roundedBackground(getColor(R.color.weike_panel), 16)
     }
 
     private fun showVersionManagementDialog() {
@@ -1596,21 +1581,21 @@ class MainActivity : AppCompatActivity() {
         save: suspend (ModelEndpointConfig, CloudProvider) -> Unit,
         test: suspend (ModelEndpointConfig) -> Result<Unit>
     ) = card().apply {
-        val url = field("接口地址")
-        val apiKey = field("接口密钥").apply {
+        val url = compactField("接口地址")
+        val apiKey = compactField("接口密钥").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        val model = field("模型名")
+        val model = compactField("模型名")
         var selectedProvider = CloudProvider.CUSTOM
         var previousCustomUrl = ""
         val officialEndpoint = TextView(this@MainActivity).apply {
-            textSize = 13f
+            textSize = 12f
             setTextColor(getColor(R.color.weike_muted))
             setPadding(dp(2), 0, dp(2), dp(8))
             visibility = View.GONE
         }
         val protocolHint = TextView(this@MainActivity).apply {
-            textSize = 13f
+            textSize = 12f
             setTextColor(getColor(R.color.weike_muted))
             setPadding(dp(2), 0, dp(2), dp(8))
             visibility = if (isAsr) View.VISIBLE else View.GONE
@@ -1674,12 +1659,12 @@ class MainActivity : AppCompatActivity() {
             applyProvider(provider, replaceWithPreset = true)
         }
 
-        readModelsButton = formActionButton("读取模型", false) {
+        readModelsButton = compactFormActionButton("读取模型", false) {
             val config = currentConfig()
             val validationError = cloudEndpointKeyValidationError(config)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@formActionButton
+                return@compactFormActionButton
             }
             readModelsButton.isEnabled = false
             readModelsButton.text = "读取中"
@@ -1698,12 +1683,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         lateinit var testButton: Button
-        testButton = formActionButton("测试连接", false) {
+        testButton = compactFormActionButton("测试连接", false) {
             val config = currentConfig()
             val validationError = cloudConfigValidationError(config, isAsr)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@formActionButton
+                return@compactFormActionButton
             }
             testButton.isEnabled = false
             testButton.text = "测试中"
@@ -1718,19 +1703,19 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
-        val saveButton = formActionButton("保存", true) {
+        val saveButton = compactFormActionButton("保存", true) {
             val config = currentConfig()
             val validationError = cloudConfigValidationError(config, isAsr)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@formActionButton
+                return@compactFormActionButton
             }
             lifecycleScope.launch {
                 save(config, selectedProvider)
                 Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
             }
         }
-        addView(picker, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(52), bottom = 12))
+        addView(picker, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), bottom = 10))
         addView(officialEndpoint)
         addView(protocolHint)
         addView(url)
@@ -1807,12 +1792,50 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(dp(52), dp(64)))
         addView(TextView(this@MainActivity).apply {
             text = title
-            textSize = 28f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.weike_text))
         }, LinearLayout.LayoutParams(0, dp(64), 1f))
         addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(52), dp(64)))
+    }
+
+    private fun settingsHubHeader(title: String, back: () -> Unit) = LinearLayout(this).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_lucide_chevron_left)
+            setColorFilter(getColor(R.color.weike_text))
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            contentDescription = "返回"
+            setOnClickListener { back() }
+        }, LinearLayout.LayoutParams(dp(48), dp(58)))
+        addView(TextView(this@MainActivity).apply {
+            text = title
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(getColor(R.color.weike_text))
+        }, LinearLayout.LayoutParams(0, dp(58), 1f))
+        addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(48), dp(58)))
+    }
+
+    private fun cloudSubpageHeader(title: String, back: () -> Unit) = LinearLayout(this).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_lucide_chevron_left)
+            setColorFilter(getColor(R.color.weike_text))
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            contentDescription = "返回"
+            setOnClickListener { back() }
+        }, LinearLayout.LayoutParams(dp(48), dp(58)))
+        addView(TextView(this@MainActivity).apply {
+            text = title
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(getColor(R.color.weike_text))
+        }, LinearLayout.LayoutParams(0, dp(58), 1f))
+        addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(48), dp(58)))
     }
 
     private fun dictionaryEditor(
@@ -2002,7 +2025,7 @@ class MainActivity : AppCompatActivity() {
                 val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
                 row.addView(TextView(this@MainActivity).apply {
                     text = preference.displayName
-                    textSize = 18f
+                    textSize = 14f
                     setTextColor(getColor(R.color.weike_text))
                     gravity = Gravity.CENTER_VERTICAL
                 }, LinearLayout.LayoutParams(0, dp(50), 1f))
@@ -2083,7 +2106,7 @@ class MainActivity : AppCompatActivity() {
                 val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
                 row.addView(TextView(this@MainActivity).apply {
                     text = symbol
-                    textSize = 22f
+                    textSize = 14f
                     gravity = Gravity.CENTER_VERTICAL
                     setTextColor(getColor(R.color.weike_text))
                     setOnClickListener { showNineKeySymbolEditor(symbol) }
@@ -2160,7 +2183,7 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(dp(64), dp(64)).apply { topMargin = dp(10) })
         addView(TextView(this@MainActivity).apply {
             text = "恋爱键盘"
-            textSize = 25f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.weike_text))
@@ -2168,7 +2191,7 @@ class MainActivity : AppCompatActivity() {
         })
         addView(TextView(this@MainActivity).apply {
             text = "本地优先，语音与离线输入"
-            textSize = 14f
+            textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.weike_muted))
             layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 3)
@@ -2176,17 +2199,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun managementPreview() = FrameLayout(this).apply {
-        background = roundedBackground(Color.rgb(232, 248, 244), 24)
+        background = roundedBackground(getColor(R.color.weike_preview), 24)
         setPadding(dp(18), dp(18), dp(18), dp(16))
         addView(TextView(this@MainActivity).apply {
             text = "恋爱输入体验"
-            textSize = 18f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.weike_text))
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(TextView(this@MainActivity).apply {
             text = "语音、拼音与英文键盘"
-            textSize = 14f
+            textSize = 12f
             setTextColor(getColor(R.color.weike_muted))
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(28)
@@ -2203,7 +2226,7 @@ class MainActivity : AppCompatActivity() {
     private fun keyboardPreviewPlaceholder() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
-        background = roundedBackground(Color.argb(92, 255, 255, 255), 16)
+        background = roundedBackground(getColor(R.color.weike_panel), 16)
         setPadding(dp(14), dp(13), dp(14), dp(13))
         listOf(10, 9, 7).forEachIndexed { row, count ->
             addView(LinearLayout(this@MainActivity).apply {
@@ -2221,48 +2244,51 @@ class MainActivity : AppCompatActivity() {
 
     private fun managementTileRow(left: View, right: View) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        addView(left, LinearLayout.LayoutParams(0, dp(156), 1f).apply { marginEnd = dp(12) })
-        addView(right, LinearLayout.LayoutParams(0, dp(156), 1f))
+        addView(left, LinearLayout.LayoutParams(0, dp(120), 1f).apply { marginEnd = dp(10) })
+        addView(right, LinearLayout.LayoutParams(0, dp(120), 1f))
     }
 
     private fun managementSingleTile(tile: View) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
-        addView(tile, LinearLayout.LayoutParams(0, dp(156), 1f).apply { marginEnd = dp(12) })
-        addView(View(this@MainActivity), LinearLayout.LayoutParams(0, dp(156), 1f))
+        addView(tile, LinearLayout.LayoutParams(0, dp(120), 1f).apply { marginEnd = dp(10) })
+        addView(View(this@MainActivity), LinearLayout.LayoutParams(0, dp(120), 1f))
     }
 
     private fun managementTile(title: String, detail: String, icon: Int, action: () -> Unit) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = roundedBackground(getColor(R.color.weike_panel), 18)
-        setPadding(dp(15), dp(14), dp(15), dp(13))
+        background = roundedBackground(getColor(R.color.weike_panel), 16)
+        setPadding(dp(13), dp(11), dp(12), dp(10))
         val header = FrameLayout(this@MainActivity)
         val darkTheme = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
         header.addView(ImageView(this@MainActivity).apply {
             setImageResource(icon)
-            setColorFilter(if (darkTheme) Color.WHITE else managementLogoBlue)
-            background = roundedBackground(if (darkTheme) Color.argb(38, 255, 255, 255) else Color.argb(51, 0, 55, 85), 9)
+            setColorFilter(if (darkTheme) Color.WHITE else pagePrimary)
+            background = roundedBackground(if (darkTheme) Color.argb(36, 255, 255, 255) else Color.argb(34, 255, 107, 157), 10)
             setPadding(dp(7), dp(7), dp(7), dp(7))
-        }, FrameLayout.LayoutParams(dp(38), dp(38), Gravity.START or Gravity.TOP))
+        }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.START or Gravity.TOP))
         header.addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_lucide_chevron_right)
             setColorFilter(getColor(R.color.weike_muted))
-        }, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.END or Gravity.CENTER_VERTICAL))
-        addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+            setPadding(dp(1), dp(1), dp(1), dp(1))
+        }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.END or Gravity.CENTER_VERTICAL))
+        addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(34)))
         addView(TextView(this@MainActivity).apply {
             text = title
-            textSize = 17f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.weike_text))
-            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10)
+            includeFontPadding = false
+            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
         })
         addView(TextView(this@MainActivity).apply {
             text = detail
-            textSize = 13f
+            textSize = 12f
             maxLines = 2
             setLineSpacing(dp(2).toFloat(), 1f)
             setTextColor(getColor(R.color.weike_muted))
-            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 3)
+            includeFontPadding = false
+            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 4)
         })
         setOnClickListener { action() }
     }
@@ -2446,22 +2472,68 @@ class MainActivity : AppCompatActivity() {
 
     private fun brandTitle(value: String) = TextView(this).apply {
         text = value
-        textSize = 32f
+        textSize = 14f
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(getColor(R.color.weike_text))
     }
 
     private fun section(value: String) = TextView(this).apply {
         text = value
-        textSize = 22f
+        textSize = 14f
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(getColor(R.color.weike_text))
         layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 28, bottom = 10)
     }
 
-    private fun subtitle(value: String) = TextView(this).apply {
+    private fun cloudSection(value: String) = TextView(this).apply {
         text = value
         textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(getColor(R.color.weike_text))
+        layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 20, bottom = 8)
+    }
+
+    private fun settingsHubSection(value: String) = TextView(this).apply {
+        text = value
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(getColor(R.color.weike_text))
+        includeFontPadding = false
+        layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 20, bottom = 9)
+    }
+
+    private fun cloudHelpText(value: String) = TextView(this).apply {
+        text = value
+        textSize = 12f
+        setTextColor(getColor(R.color.weike_muted))
+        setLineSpacing(dp(2).toFloat(), 1f)
+    }
+
+    private fun promptTextField(hint: String, minLines: Int, maxLines: Int, top: Int) = EditText(this).apply {
+        this.hint = hint
+        this.minLines = minLines
+        this.maxLines = maxLines
+        textSize = 12f
+        gravity = Gravity.TOP or Gravity.START
+        isVerticalScrollBarEnabled = true
+        overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        setTextColor(getColor(R.color.weike_text))
+        setHintTextColor(getColor(R.color.weike_muted))
+        setLineSpacing(dp(2).toFloat(), 1f)
+        background = GradientDrawable().apply {
+            setColor(getColor(R.color.weike_panel))
+            cornerRadius = dp(12).toFloat()
+            setStroke(dp(1), getColor(R.color.weike_key))
+        }
+        layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = top)
+    }
+
+    private fun subtitle(value: String) = TextView(this).apply {
+        text = value
+        textSize = 12f
         setTextColor(getColor(R.color.weike_muted))
         setLineSpacing(dp(3).toFloat(), 1f)
         layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 8)
@@ -2489,7 +2561,7 @@ class MainActivity : AppCompatActivity() {
         val titleRow = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
         titleRow.addView(TextView(this@MainActivity).apply {
             text = title
-            textSize = 20f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.weike_text))
         }, LinearLayout.LayoutParams(0, dp(42), 1f))
@@ -2510,7 +2582,7 @@ class MainActivity : AppCompatActivity() {
             steps.filter { it.isNotBlank() }.forEachIndexed { index, value ->
                 addView(TextView(this@MainActivity).apply {
                     text = value
-                    textSize = if (index == 0) 14f else 13f
+                    textSize = if (index == 0) 14f else 12f
                     typeface = if (index == 0) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
                     setTextColor(if (index == 0) getColor(R.color.weike_text) else getColor(R.color.weike_muted))
                     setLineSpacing(dp(2).toFloat(), 1f)
@@ -2532,13 +2604,13 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@MainActivity).apply {
                 text = title
-                textSize = 17f
+                textSize = 14f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(getColor(R.color.weike_text))
             })
             addView(TextView(this@MainActivity).apply {
                 text = detail
-                textSize = 14f
+                textSize = 12f
                 setLineSpacing(dp(3).toFloat(), 1f)
                 setTextColor(getColor(R.color.weike_muted))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 4)
@@ -2554,7 +2626,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             addView(TextView(this@MainActivity).apply {
                 text = title
-                textSize = 18f
+                textSize = 14f
                 setTextColor(getColor(if (destructive) android.R.color.holo_red_dark else R.color.weike_text))
             })
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -2571,8 +2643,8 @@ class MainActivity : AppCompatActivity() {
         gravity = Gravity.CENTER_VERTICAL
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(this@MainActivity).apply { text = title; textSize = 18f; setTextColor(getColor(R.color.weike_text)) })
-            addView(TextView(this@MainActivity).apply { text = detail; textSize = 13f; setTextColor(getColor(R.color.weike_muted)) })
+            addView(TextView(this@MainActivity).apply { text = title; textSize = 14f; setTextColor(getColor(R.color.weike_text)) })
+            addView(TextView(this@MainActivity).apply { text = detail; textSize = 12f; setTextColor(getColor(R.color.weike_muted)) })
         }, LinearLayout.LayoutParams(0, dp(62), 1f))
         addView(control, LinearLayout.LayoutParams(dp(150), dp(54)))
     }
@@ -2580,12 +2652,18 @@ class MainActivity : AppCompatActivity() {
     private fun field(hint: String) = EditText(this).apply {
         this.hint = hint
         setSingleLine(true)
-        textSize = 16f
+        textSize = 14f
         setTextColor(getColor(R.color.weike_text))
         setHintTextColor(getColor(R.color.weike_muted))
         background = roundedBackground(getColor(R.color.weike_key), 12)
         setPadding(dp(12), 0, dp(12), 0)
         layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), bottom = 8)
+    }
+
+    private fun compactField(hint: String) = field(hint).apply {
+        textSize = 14f
+        setPadding(dp(11), 0, dp(11), 0)
+        layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), bottom = 7)
     }
 
     private fun settingsSpinner(options: List<String>) = Spinner(this).apply {
@@ -2595,7 +2673,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun historyCard(value: String) = TextView(this).apply {
         text = value
-        textSize = 17f
+        textSize = 14f
         setLineSpacing(dp(4).toFloat(), 1f)
         setTextColor(getColor(R.color.weike_text))
         background = roundedBackground(getColor(R.color.weike_panel), 22)
@@ -2618,7 +2696,7 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(dp(22), dp(22)))
         val value = TextView(this@MainActivity).apply {
             text = "0"
-            textSize = 24f
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.weike_text))
         }
@@ -2626,7 +2704,7 @@ class MainActivity : AppCompatActivity() {
         addView(value, margins(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8))
         addView(TextView(this@MainActivity).apply {
             text = label
-            textSize = 14f
+            textSize = 12f
             setTextColor(getColor(R.color.weike_muted))
             layoutParams = margins(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 5)
         })
@@ -2638,7 +2716,7 @@ class MainActivity : AppCompatActivity() {
         setPadding(dp(16), dp(7), dp(8), dp(7))
         addView(TextView(this@MainActivity).apply {
             text = value
-            textSize = 16f
+            textSize = 14f
             gravity = Gravity.CENTER_VERTICAL
             setTextColor(getColor(R.color.weike_text))
         }, LinearLayout.LayoutParams(0, dp(46), 1f))
@@ -2660,7 +2738,7 @@ class MainActivity : AppCompatActivity() {
     private fun primaryButton(label: String, action: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
-        textSize = 16f
+        textSize = 14f
         setTextColor(Color.WHITE)
         background = roundedBackground(pagePrimary, 24)
         layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 4)
@@ -2670,13 +2748,21 @@ class MainActivity : AppCompatActivity() {
     private fun formActionButton(label: String, filled: Boolean, action: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
-        textSize = 16f
+        textSize = 14f
         setTextColor(if (filled) Color.WHITE else pagePrimary)
         background = roundedBackground(if (filled) pagePrimary else getColor(R.color.weike_key), 18)
         minWidth = 0
         minimumWidth = 0
         setOnClickListener { action() }
     }
+
+    private fun compactFormActionButton(label: String, filled: Boolean, action: () -> Unit) =
+        formActionButton(label, filled, action).apply {
+            textSize = 14f
+            setPadding(dp(12), 0, dp(12), 0)
+            minHeight = 0
+            minimumHeight = 0
+        }
 
     private fun addDivider(parent: LinearLayout) {
         parent.addView(View(this).apply { setBackgroundColor(getColor(R.color.weike_key)) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))

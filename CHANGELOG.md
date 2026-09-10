@@ -1,5 +1,81 @@
 # Changelog
 
+## 1.5.2 - 2026-09-10
+
+### 简体中文
+
+- 管理 App 页面字号规范化：页面标题、区块标题和卡片主标题统一为 14sp，说明文字与副标题统一为 12sp，降低大模型配置页和设置页的视觉压迫感。
+- 优化设置管理页结构与图标呈现，补齐权限管理图标，统一深浅色下的底栏和卡片配色。
+- 修复点击输入框外空白区域无法收起软键盘的问题，避免键盘遮挡确认按钮等操作。
+- 修复英文大写状态导致按键被拉高变形的问题，并调整 Shift 图标显示。
+- 大模型配置页支持保存后回读提示词内容，避免提示词修改后看起来未生效。
+- 中文主键盘默认改为九宫格拼音，未保存过设置的新用户首次打开即使用九宫格。
+
+### English
+
+- Standardized management-app typography: page titles, section titles and card titles now use 14sp; helper and subtitle text uses 12sp.
+- Refined the settings hub structure and icons, including the permissions tile, with consistent light/dark colors.
+- Dismisses the soft keyboard when tapping outside focused inputs so covered action buttons can be reached.
+- Fixed distorted key height when switching to uppercase and adjusted the Shift icon.
+- Model prompt fields now reload saved content after saving, making prompt changes visibly persistent.
+- The default Chinese keyboard layout is now nine-key Pinyin for users without a saved preference.
+
+## 1.5.1 - 2026-09-05
+
+### 简体中文
+
+- 修复部分机型（Android 15 16KB 内存页内核，如新版 HyperOS）安装报错「安装失败 -2」的问题：改为压缩打包 native 库，不再依赖 4KB 页对齐。
+- 签名方案调整为 v1 文件 + v2 签名块，兼容更多国产 ROM 安装器。
+
+### English
+
+- Fixed install failure (error -2) on devices with 16KB page kernels (Android 15): native libraries are now compressed, removing the 4KB page-alignment requirement.
+- Signature scheme adjusted to v1 files + v2 block for broader ROM installer compatibility.
+
+## 1.5.0 - 2026-09-05
+
+### 简体中文
+
+- Emoji 面板全面重做：新增常用/笑脸/心情/手势/动物/食物/符号 7 个分类、分页浏览（约 300 个表情）、面板内删除键，告别 20 个表情的单页时代。
+- 符号页新增第二页：补齐《》〈〉「」『』【】〔〕……——·～￥%‰℃ 等中文聊天常用符号，底栏新增 1/2 翻页键。
+- 英文 Shift 键改为标准行为：单击只大写下一个字母，双击锁定大写（锁定时高亮显示），再按解锁。
+- 新增按键预览气泡：按下字母/数字/符号键时在键位上方显示放大字符，打字反馈更清晰。
+- 回车键跟随输入框语义：搜索框显示「搜索」并执行搜索、登录页显示「下一步」、多行输入显示「换行」直接换行，不再一律强制「发送」（修复在搜索框/登录页回车无效的问题）。
+
+### English
+
+- Rebuilt the emoji panel: 7 categories (recent, faces, hearts, gestures, animals, food, symbols), paging with ~300 emojis, and an in-panel delete key.
+- Added a second symbols page with CJK brackets and typographic marks (《》【】…… —— ￥ ℃ etc.) plus a 1/2 page toggle.
+- English shift now behaves like stock keyboards: tap once for a single capital, double-tap to lock caps (highlighted), tap again to unlock.
+- Added key-press preview bubbles above letter, number and symbol keys.
+- The enter key now follows the focused field's IME action (Search / Next / Done / newline) instead of always forcing Send, fixing dead enter presses in search bars and login forms.
+
+## 1.4.9 - 2026-09-05
+
+### 简体中文
+
+- 修复长按退格连删时误清整个拼音组合串的问题，长按现在只做连续删除。
+- 修复英文模式切换到其他键盘时未上屏字母丢失的问题，切换前会自动提交已输入内容。
+- 修复从语音/帮你回/剪贴板进入符号页后返回被强制切到英文键盘的问题，现在恢复原模式。
+- 九键拼音字表改为引擎加载时在后台线程预热，首次九键输入不再卡顿。
+- 深色模式全面适配：帮你回/AI优化等卡片、管理 App 底栏、功能卡、导航高亮不再出现白底浅字。
+- 管理App 修复「优化输入」页标题渲染在内容之后的问题；移除 uiMode 配置避免切深色不刷新。
+- 横屏键盘高度按屏幕自适应（260-340dp），按键恢复可触控尺寸。
+- 按键文字跟随系统字体大小（sp，上限 1.3 倍）；按键触摸增加 6dp 容差，快速滑动点击不再丢字。
+- 键盘视图脱离窗口时清理长按/连删回调，避免残留触发。
+
+### English
+
+- Fixed long-press backspace accidentally clearing the whole composition; it now only repeats deletion.
+- Fixed English letters being lost when switching keyboard modes; unfinished input is committed first.
+- Fixed symbol page returning to English instead of the original mode (voice / ask / clipboard).
+- Pre-warmed the nine-key character table on the Rime worker thread to remove first-tap jank.
+- Full dark-mode pass for reply/polish cards and the management app (bottom bar, feature cards, nav highlight).
+- Fixed the Optimize Input page header order; theme changes now properly recreate the activity.
+- Landscape keyboard height adapts to the screen (260-340dp) for tappable keys.
+- Key labels respect system font scale (sp, capped at 1.3x); added 6dp touch slop to reduce dropped taps.
+- Cleaned up pending long-press/repeat callbacks on detach.
+
 ## 1.4.8 - 2026-08-27
 
 ### 简体中文

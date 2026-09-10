@@ -23,8 +23,8 @@ android {
         // This product is based on the current Vertick IME v1.4.3 release.
         // Keep the upstream-compatible version so the built-in release checker
         // does not report a false update against the exact same baseline.
-        versionCode = 28
-        versionName = "1.4.8"
+        versionCode = 32
+        versionName = "1.5.2"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -37,6 +37,21 @@ android {
                 keyAlias = releaseProperties.getProperty("keyAlias")
                 keyPassword = releaseProperties.getProperty("keyPassword")
             }
+            // v1 files + v2 block is the most widely compatible combo for
+            // Chinese ROM installers; v3-only output was rejected by some.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = false
+        }
+    }
+
+    packaging {
+        // Compress native libraries so the APK has no 4KB page-alignment
+        // requirement. Uncompressed 4KB-aligned .so files fail to install
+        // (INSTALL_FAILED_INVALID_APK / error -2) on devices running
+        // Android 15+ with 16KB page kernels.
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 
