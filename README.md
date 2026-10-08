@@ -6,7 +6,7 @@ An open-source AI-assisted Android keyboard for everyday typing, reply suggestio
 
 [简体中文](README_CN.md) · [Download](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest) · [Privacy](PRIVACY.md) · [GPL-3.0-or-later](LICENSE)
 
-Current release: **v1.4.8**. Requires Android 13 or later and an arm64-v8a device.
+Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a device.
 
 ## Features
 

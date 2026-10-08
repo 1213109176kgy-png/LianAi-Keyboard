@@ -23,6 +23,7 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
@@ -54,6 +55,7 @@ import com.weike.ime.speech.BoundedPcmBuffer
 import com.weike.ime.speech.RoutedAsrClient
 import com.weike.ime.text.JiebaSegmenter
 import com.weike.ime.text.StructuredExpressionFormatter
+import com.weike.ime.text.AiFallbackReason
 import com.weike.ime.text.SuggestionFallback
 import com.weike.ime.text.DraftEditor
 import com.weike.ime.workflow.WorkflowIntent
@@ -798,6 +800,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun onWindowShown() {
         super.onWindowShown()
+        // The IME supplies its own switcher and dismissal controls. Hide only
+        // Android's IME caption buttons, preserving system gesture navigation.
+        window?.window?.decorView?.let { decor ->
+            decor.windowInsetsController?.hide(WindowInsets.Type.captionBar())
+            decor.post {
+                decor.windowInsetsController?.hide(WindowInsets.Type.captionBar())
+            }
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -918,6 +928,18 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 commitTextAndPredict(carried)
             }
             applyMode(mode)
+        }
+    }
+
+    override fun returnToNineKeyPinyin() {
+        if (sensitiveField) return
+        chineseKeyboardLayout = ChineseKeyboardLayout.NINE_KEY
+        finishCompositionThen { applyMode(KeyboardMode.PINYIN) }
+        serviceScope.launch(Dispatchers.Default) {
+            runCatching { pinyinDecoder.selectChineseKeyboardLayout(ChineseKeyboardLayout.NINE_KEY) }
+        }
+        serviceScope.launch(Dispatchers.IO) {
+            runCatching { container.settings.saveChineseKeyboardLayout(ChineseKeyboardLayout.NINE_KEY) }
         }
     }
 
@@ -1125,7 +1147,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 replyLoading = false
                 Log.w(TAG, "Reply suggestions unavailable; using local fallback", it)
                 replyOptions = SuggestionFallback.replies(source)
-                replyEmotion = "网络不稳定 · 本地建议"
+                replyEmotion = AiFallbackReason.replyLabel(it)
                 voiceState = VoiceUiState.Idle
                 render()
             }
@@ -1220,6 +1242,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         }
         if (!recorder.canRecord()) {
             voiceState = VoiceUiState.Error("未授予麦克风权限，请打开恋爱键盘完成授权")
+            toast("未授予麦克风权限，请打开恋爱键盘完成授权")
             render()
             return
         }

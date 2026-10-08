@@ -11,7 +11,7 @@
   <a href="PRIVACY.md">隐私说明</a>
 </p>
 
-> 当前版本：**v1.4.8**。最低支持 Android 13（API 33），当前提供 arm64-v8a 安装包。
+> 当前版本：**v1.5.3**。最低支持 Android 13（API 33），当前提供 arm64-v8a 安装包。
 
 ## 项目简介
 
@@ -38,7 +38,7 @@
 
 ## 安装与使用
 
-1. 前往 [GitHub Releases](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest) 下载 v1.4.8 APK。
+1. 前往 [GitHub Releases](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest) 下载 v1.5.3 APK。
 2. 安装后打开“恋爱键盘”，按照首页四步引导启用并切换输入法。
 3. 进入“我的 → 设置 → 大模型配置”，选择文本模型厂商并填写接口地址、模型和 API Key。
 4. 在微信、短信或其他应用中点击输入框，切换到恋爱键盘即可使用。
