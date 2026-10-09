@@ -21,6 +21,8 @@ Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a devic
   <img src="docs/images/keyboard-26.png" alt="26-key Pinyin" width="31%" />
   <img src="docs/images/keyboard-9.png" alt="Nine-key Pinyin" width="31%" />
   <img src="docs/images/model-settings.png" alt="Model settings" width="31%" />
+  <img width="360" height="544" alt="image" src="https://github.com/user-attachments/assets/bde62a90-c93a-4440-a321-aab34d2a84e2" />
+
 </p>
 
 ## Install
