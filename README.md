@@ -102,7 +102,7 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 欢迎扫码添加微信好友，交流使用体验、功能建议或参与开发。
 
 <p align="center"><img src="docs/images/developer-wechat.jpg" alt="开发者微信二维码" width="360" /></p>
-<img width="360" height="544" alt="image" src="https://github.com/user-attachments/assets/91576b94-a225-43b8-b2d7-36209bd71b50" />
+<p align="center"><img width="360" height="544" alt="image" src="https://github.com/user-attachments/assets/91576b94-a225-43b8-b2d7-36209bd71b50" /></p>
 
 
 ## 随缘打赏
