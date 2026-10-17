@@ -14,6 +14,7 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -27,12 +28,17 @@ import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.weike.ime.R
+import com.weike.ime.BuildConfig
+import com.weike.ime.ImagePickerActivity
 import com.weike.ime.data.AppContainer
 import com.weike.ime.data.AppSettingsRepository
 import com.weike.ime.data.ChineseKeyboardLayout
 import com.weike.ime.data.ClipboardEntry
 import com.weike.ime.data.CloudApiSettings
+import com.weike.ime.data.CloudProvider
+import com.weike.ime.data.ModelEndpointConfig
 import com.weike.ime.data.DictionaryPackManager
 import com.weike.ime.data.HapticStrength
 import com.weike.ime.data.HistoryRetention
@@ -50,6 +56,7 @@ import com.weike.ime.data.VoiceUiState
 import com.weike.ime.data.WritingStyle
 import com.weike.ime.network.MimoTextPolisher
 import com.weike.ime.network.TextPolisher
+import com.weike.ime.network.VisionReplyClient
 import com.weike.ime.speech.AudioRecorder
 import com.weike.ime.speech.BoundedPcmBuffer
 import com.weike.ime.speech.RoutedAsrClient
@@ -82,6 +89,9 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var container: AppContainer
     private lateinit var recorder: AudioRecorder
+    private val visionReplyClient by lazy { VisionReplyClient() }
+    @Volatile private var screenshotReplyEnabled = false
+    private var visionJob: Job? = null
     private lateinit var keyboard: WeikeKeyboardView
     private var inputViewHost: FrameLayout? = null
     private var overlayHost: FrameLayout? = null
@@ -112,7 +122,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         polishRelationProvider = { polishRelation },
         relationPromptsProvider = { relationPrompts }
     )
-    private val asrClient = RoutedAsrClient(endpointProvider = { cloudApiSettings.asr })
+    // 语音识别免配置：用户没有自定义 ASR 接口时，直接使用内置小米 MiMo。
+    private val asrClient = RoutedAsrClient(endpointProvider = {
+        cloudApiSettings.asr.takeIf { it.isComplete() } ?: BUILTIN_ASR_CONFIG
+    })
 
     private var mode = KeyboardMode.PINYIN
     private var modeBeforeSymbols = KeyboardMode.PINYIN
@@ -177,6 +190,12 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private var sensitiveField = false
     private var rawTranscript = ""
     private var finishVoiceJob: Job? = null
+    private var dictationActive = false
+    private var dictationArmed = false
+    private var dictationPartial = ""
+    private var dictationBuffer = BoundedPcmBuffer(MAX_PCM_BYTES)
+    private var dictationJob: Job? = null
+    private var dictationSessionId = 0L
     private var commitTextJob: Job? = null
     private var audioBuffer = BoundedPcmBuffer(MAX_PCM_BYTES)
     private var voiceSessionId = 0L
@@ -201,11 +220,11 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 englishBuffer, englishCandidates, predictionCandidates, rawTranscript, sensitiveField, hapticStrength,
                 pinyinReady, pinyinDecoder.statusText, keyboardTheme, keyboardSoundVolume, visibleKeyboardModes,
                 clipboardEntries, chineseKeyboardLayout == ChineseKeyboardLayout.NINE_KEY,
-                modeBeforeSymbols == KeyboardMode.ENGLISH, nineKeySymbols, false,
-                false, candidateTextSizeLevel, englishAutoCapitalize, shouldAutoCapitalizeEnglish(), keyboardLogo,
+                modeBeforeSymbols == KeyboardMode.ENGLISH, nineKeySymbols, keyboardCloseButtonEnabled,
+                quickImeSwitcherEnabled, candidateTextSizeLevel, englishAutoCapitalize, shouldAutoCapitalizeEnglish(), keyboardLogo,
                 currentRecentClipboard(), keyboardHeightLevel, keyboardBottomOffsetLevel, punctuationShortcuts,
                 cursorSliderEnabled, polishDraft, polishCursor, polishOptions, polishLoading,
-                replyOptions, replyLoading, replyEmotion, enterActionLabel()
+                replyOptions, replyLoading, replyEmotion, enterActionLabel(), dictationActive, screenshotReplyEnabled
             )
         }
     }
@@ -215,6 +234,11 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 ACTION_CLEAR_RIME_LEARNING -> clearPinyinLearning()
                 ACTION_CLEAR_PREDICTION_LEARNING -> clearPredictionLearning()
                 ACTION_RELOAD_RIME_BUNDLE -> reloadPinyinBundle()
+                ACTION_IMAGE_PICKED -> {
+                    val uri = intent.data ?: pendingImageUri
+                    pendingImageUri = null
+                    uri?.let(::handlePickedImage)
+                }
             }
         }
     }
@@ -251,14 +275,16 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         clipboardManager = getSystemService(ClipboardManager::class.java)
         clipboardManager.addPrimaryClipChangedListener(clipboardListener)
         capturePrimaryClipboard()
-        registerReceiver(
+        ContextCompat.registerReceiver(
+            this,
             clearLearningReceiver,
             IntentFilter().apply {
                 addAction(ACTION_CLEAR_RIME_LEARNING)
                 addAction(ACTION_CLEAR_PREDICTION_LEARNING)
                 addAction(ACTION_RELOAD_RIME_BUNDLE)
+                addAction(ACTION_IMAGE_PICKED)
             },
-            Context.RECEIVER_NOT_EXPORTED
+            ContextCompat.RECEIVER_NOT_EXPORTED
         )
         serviceScope.launch {
             for (operation in pinyinOperations) {
@@ -435,6 +461,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 cloudApiSettings = settings
             }
         }
+        serviceScope.launch {
+            visionReplyClient.enabled().onSuccess { enabled ->
+                if (screenshotReplyEnabled != enabled) {
+                    screenshotReplyEnabled = enabled
+                    render()
+                }
+            }
+        }
         serviceScope.launch { container.settings.replyPrompt.collect { replyPrompt = it } }
         serviceScope.launch { container.settings.relationPrompts.collect { relationPrompts = it } }
         serviceScope.launch {
@@ -530,7 +564,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             return
         }
         if (!Settings.canDrawOverlays(this)) {
-            toast("请先在维刻的快速开始中授权悬浮窗权限")
+            toast("请先在恋爱键盘的权限管理中授权悬浮窗权限")
             return
         }
         if (overlayHost != null) return
@@ -543,7 +577,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         val maxPanelHeight = minOf(dp(330), (screenHeight * .60f).toInt())
         val panelHeight = minOf(maxPanelHeight, ((screenWidth - dp(32)) / 1.7f).toInt())
         val panelWidth = (panelHeight * 1.7f).toInt()
-        val windowContext = createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+        val windowContext = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+        } else {
+            // API 29 has no window contexts; the service context still accepts
+            // application-overlay windows there.
+            this
+        }
         val panel = FloatingKeyboardPanel(
             context = windowContext,
             canDrag = { pinyinBuffer.isBlank() && englishBuffer.isBlank() },
@@ -745,6 +785,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (voiceState != VoiceUiState.Idle || activeVoiceMode != null || rawTranscript.isNotBlank()) {
             cancelActiveVoiceSession()
         }
+        if (dictationActive) stopDictation(commit = false)
         lastPackageName = attribute?.packageName
         sensitiveField = isSensitive(attribute)
         if (!configurationRestart) {
@@ -754,6 +795,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             clearPredictions(clearContext = true)
             if (sensitiveField) mode = KeyboardMode.ENGLISH
             else applyConfiguredStartupMode()
+            // 选图返回后键盘按启动模式重置了：无论回调与广播谁先到，都恢复到帮你回
+            if (pendingAskRestore && !sensitiveField && mode != KeyboardMode.ASK) {
+                applyMode(KeyboardMode.ASK)
+            }
         } else if (recovery != null) {
             restoreInputViewRecovery(recovery)
             Log.d(TAG, "Restored IME session after configuration change; mode=${recovery.mode}")
@@ -777,6 +822,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         Log.d(TAG, "onStartInputView; restarting=$restarting; mode=$mode; pinyin=${pinyinRawBuffer.length}; english=${englishBuffer.length}")
         super.onStartInputView(info, restarting)
         inputViewActive = true
+        if (pendingAskRestore) {
+            pendingAskRestore = false
+            if (!sensitiveField && mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
+        }
         presentRecentClipboardForInputView()
         // Some Xiaomi builds recreate only the input view. Reassert the composing
         // value against the newly supplied InputConnection in that case.
@@ -803,9 +852,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         // The IME supplies its own switcher and dismissal controls. Hide only
         // Android's IME caption buttons, preserving system gesture navigation.
         window?.window?.decorView?.let { decor ->
-            decor.windowInsetsController?.hide(WindowInsets.Type.captionBar())
-            decor.post {
+            // Caption-bar insets control exists from API 30; older ROMs draw no
+            // caption bar on IME windows anyway.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 decor.windowInsetsController?.hide(WindowInsets.Type.captionBar())
+                decor.post {
+                    decor.windowInsetsController?.hide(WindowInsets.Type.captionBar())
+                }
             }
         }
     }
@@ -818,6 +871,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         // checks the package, input type, and field id.
         captureInputViewRecovery()
         inputViewActive = false
+        if (dictationActive) stopDictation(commit = true)
         stopVoice(cancelled = true)
         super.onFinishInputView(finishingInput)
     }
@@ -879,6 +933,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun onDestroy() {
+        visionJob?.cancel()
+        stopDictation(commit = false)
         stopVoice(cancelled = true)
         mainHandler.removeCallbacks(landscapeOverlayRunnable)
         dismissLandscapeOverlay()
@@ -888,7 +944,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         rimeTermStageJob?.cancel()
         runBlocking(Dispatchers.Default) {
             languageEngineMutex.withLock {
-                pinyinDecoder.shutdown()
+                pinyinDecoder.terminate()
                 jieba.release()
             }
         }
@@ -910,6 +966,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (this.mode != mode && (voiceState != VoiceUiState.Idle || activeVoiceMode != null || rawTranscript.isNotBlank())) {
             cancelActiveVoiceSession()
         }
+        if (dictationActive) stopDictation(commit = true)
         flushPendingPinyinBatch()
         if (this.mode == KeyboardMode.PINYIN && (pinyinRawBuffer.isNotBlank() || pendingPinyinMutations > 0)) {
             enqueuePinyin {
@@ -944,6 +1001,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun closeKeyboard() {
+        if (dictationActive) stopDictation(commit = true)
         if (voiceState != VoiceUiState.Idle || activeVoiceMode != null || rawTranscript.isNotBlank()) {
             cancelActiveVoiceSession()
         }
@@ -957,6 +1015,17 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (previous != nextMode) clearPredictions()
         rememberKeyboardMode(mode)
         if (mode == KeyboardMode.PINYIN) requestPinyinEngine()
+        if (mode == KeyboardMode.ASK) {
+            // 业务开关可能变化，进入帮你回时刷新一次
+            serviceScope.launch {
+                visionReplyClient.enabled().onSuccess { enabled ->
+                    if (screenshotReplyEnabled != enabled) {
+                        screenshotReplyEnabled = enabled
+                        render()
+                    }
+                }
+            }
+        }
         if (previous == KeyboardMode.PINYIN && mode != KeyboardMode.PINYIN) scheduleLanguageEngineRelease()
         render()
     }
@@ -1049,6 +1118,131 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun cancelVoice() = stopVoice(cancelled = true)
 
+    /**
+     * 键盘上的随身听写：麦克风按钮或长按空格触发。录音期间每 1.4 秒把最近
+     * 15 秒音频送去识别并作为 composing 文本实时上屏；结束时用完整音频做
+     * 终次识别并正式提交。
+     */
+    override fun toggleDictation() {
+        if (dictationActive) stopDictation(commit = true) else startDictation()
+    }
+
+    override fun startDictation() {
+        if (dictationActive) return
+        if (sensitiveField) {
+            toast("敏感输入框不能使用语音输入")
+            return
+        }
+        if (voiceState != VoiceUiState.Idle || activeVoiceMode != null) {
+            toast("正在使用超会说，请先结束当前语音")
+            return
+        }
+        if (!recorder.canRecord()) {
+            toast("未授予麦克风权限，请打开恋爱键盘完成授权")
+            return
+        }
+        // finishCompositionThen 可能排队等拼音组合提交完；armed 保证排队期间
+        // 用户松开（finishDictation）后，迟到的启动会被丢弃，不会出现
+        // 「松手后录音才开始且停不下来」。
+        dictationArmed = true
+        finishCompositionThen { startDictationInternal() }
+    }
+
+    override fun finishDictation() {
+        dictationArmed = false
+        if (dictationActive) stopDictation(commit = true)
+    }
+
+    private fun startDictationInternal() {
+        if (!dictationArmed) return
+        dictationArmed = false
+        dictationActive = true
+        dictationPartial = ""
+        dictationBuffer.clear()
+        dictationSessionId += 1
+        val sessionId = dictationSessionId
+        clearPredictions()
+        recorder.start(
+            serviceScope,
+            { chunk, count ->
+                val keepGoing = dictationBuffer.append(chunk, count)
+                if (!keepGoing) {
+                    serviceScope.launch {
+                        if (dictationActive) stopDictation(commit = true)
+                    }
+                }
+                keepGoing
+            },
+            { level -> if (::keyboard.isInitialized) keyboard.post { keyboard.setAudioLevel(level) } }
+        ) { error ->
+            serviceScope.launch {
+                if (dictationActive) {
+                    stopDictation(commit = false)
+                    toast(error)
+                }
+            }
+        }
+        dictationJob = serviceScope.launch {
+            while (dictationActive && sessionId == dictationSessionId) {
+                delay(DICTATION_PARTIAL_INTERVAL_MS)
+                if (!dictationActive || sessionId != dictationSessionId) break
+                // 用完整音频做中间识别：内容只增不减，避免滑窗截断造成
+                // 「显示一大段又缩回几个字」的闪退观感。
+                val pcm = dictationBuffer.tail(Int.MAX_VALUE)
+                if (pcm.size < AudioRecorder.SAMPLE_RATE) continue
+                val partial = asrClient.transcribe(pcm).getOrNull()?.trim().orEmpty()
+                if (partial.isNotBlank() && dictationActive && sessionId == dictationSessionId) {
+                    dictationPartial = partial
+                    currentInputConnection?.setComposingText(partial, 1)
+                }
+            }
+        }
+        render()
+    }
+
+    private fun stopDictation(commit: Boolean) {
+        if (!dictationActive) return
+        dictationActive = false
+        dictationSessionId += 1
+        dictationJob?.cancel()
+        dictationJob = null
+        recorder.stop()
+        val pcm = dictationBuffer.snapshotAndClear().pcm
+        val connection = currentInputConnection
+        render()
+        if (!commit || connection == null || pcm.isEmpty() || sensitiveField) {
+            if (commit) runCatching {
+                connection?.setComposingText(dictationPartial, 1)
+                connection?.finishComposingText()
+            }
+            return
+        }
+        serviceScope.launch {
+            // 终次识别失败（网络抖动等）时回退到已实时上屏的中间结果，
+            // 不能把用户看到的文字清掉。
+            val final = asrClient.transcribe(pcm).getOrNull()?.trim().orEmpty()
+                .ifBlank { dictationPartial }
+            if (final.isBlank()) {
+                runCatching {
+                    connection.setComposingText("", 1)
+                    connection.finishComposingText()
+                }
+                toastFor("没有识别到内容，请重试", 1_500L)
+                return@launch
+            }
+            val batchStarted = connection.beginBatchEdit()
+            try {
+                if (connection.setComposingText(final, 1)) connection.finishComposingText()
+                else connection.commitText(final, 1)
+            } finally {
+                if (batchStarted) connection.endBatchEdit()
+            }
+            lastCommittedText = final
+            lastCommitConnection = connection
+            schedulePredictions(final, connection)
+        }
+    }
+
     override fun dismissAnswer() {
         if (mode == KeyboardMode.ASK && voiceState is VoiceUiState.Preview) {
             rawTranscript = ""
@@ -1089,8 +1283,108 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         render()
     }
 
-    override fun analyzeClipboardReply() {
+    /** 截图识别回复：相册选聊天截图 → 后台视觉模型 → 多条场景化回复。 */
+    override fun screenshotReply() {
         if (sensitiveField || mode != KeyboardMode.ASK) return
+        val token = container.userSession.token()
+        if (token == null) {
+            voiceState = VoiceUiState.Error("请先打开恋爱键盘 App，在个人中心登录后使用")
+            render()
+            return
+        }
+        runCatching {
+            startActivity(
+                android.content.Intent(this, ImagePickerActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure {
+            voiceState = VoiceUiState.Error("无法打开相册：${it.message}")
+            render()
+        }
+    }
+
+    private var lastVisionUri: android.net.Uri? = null
+
+    /** 选图后键盘重新显示时要恢复到帮你回（onStartInput 会按启动模式重置，需在 view 显示时再切回）。 */
+    @Volatile
+    private var pendingAskRestore = false
+
+    /** 图片解码专用线程：媒体提供器偶发阻塞时靠 Future 超时兜底，线程本身可能滞留但 UI 不受影响。 */
+    private val imageDecodeExecutor by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "vision-image-decode").apply { isDaemon = true }
+        }
+    }
+
+    private fun handlePickedImage(uri: android.net.Uri) {
+        if (sensitiveField) return
+        // 广播与选图页关闭后的 onStartInput/onStartInputView 回调之间没有固定顺序：
+        // 标记必须先于一切早退设置，两处生命周期回调里都会按它恢复帮你回。
+        pendingAskRestore = true
+        // 全屏选图会经历键盘隐藏/重建，回来时可能已被重置回拼音模式：主动切回帮你回
+        if (mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
+        val token = container.userSession.token() ?: return
+        lastVisionUri = uri
+        visionJob?.cancel()
+        replySource = ""
+        replyOptions = emptyList()
+        replyEmotion = "识别截图中…"
+        replyLoading = true
+        voiceState = VoiceUiState.Idle
+        render()
+        // 全屏选图页关闭后输入法窗口处于收起状态，主动拉起键盘展示识别进度
+        runCatching { requestShowSelf(0) }
+        visionJob = serviceScope.launch {
+            // 个别 ROM 的媒体提供器会偶发阻塞 openInputStream（协程取消不了阻塞 IO），
+            // 用带超时的 Future 兜底：卡住也能在限时后恢复 UI 并提示，而不是永远转圈。
+            val image = runCatching {
+                imageDecodeExecutor.submit(java.util.concurrent.Callable { downscaleAndEncode(uri) })
+                    .get(12, java.util.concurrent.TimeUnit.SECONDS)
+            }.getOrNull()
+            if (image == null) {
+                replyLoading = false
+                voiceState = VoiceUiState.Error("读取图片超时，请重新选择")
+                render()
+                return@launch
+            }
+            val (base64, mime) = image
+            visionReplyClient.reply(token, base64, mime)
+                .onSuccess { result ->
+                    replyLoading = false
+                    replyOptions = result.replies
+                    replyEmotion = buildString {
+                    append(result.scenario.ifBlank { "其他" })
+                        if (result.analysis.isNotBlank()) append(" · ").append(result.analysis)
+                    }
+                    // 等待期间模式可能又被重置，结果落地时确保停在帮你回
+                    if (mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
+                    render()
+                }
+                .onFailure { error ->
+                    replyLoading = false
+                    voiceState = VoiceUiState.Error(error.message ?: "识别失败，请稍后重试")
+                    if (mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
+                    render()
+                }
+        }
+    }
+
+    /** 读取相册图片，最长边压到 1280、JPEG 80，避免超出请求体限制。 */
+    private fun downscaleAndEncode(uri: android.net.Uri): Pair<String, String>? = runCatching {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1280) sample *= 2
+        val bitmap = contentResolver.openInputStream(uri)?.use { input ->
+            android.graphics.BitmapFactory.decodeStream(input, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return null
+        val output = java.io.ByteArrayOutputStream()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, output)
+        bitmap.recycle()
+        android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP) to "image/jpeg"
+    }.getOrNull()
+
+    override fun analyzeClipboardReply() {        if (sensitiveField || mode != KeyboardMode.ASK) return
         val content = runCatching {
             clipboardManager.primaryClip
                 ?.getItemAt(0)
@@ -1109,7 +1403,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun regenerateReplyOptions() {
-        if (mode == KeyboardMode.ASK && replySource.isNotBlank()) generateReplyOptions()
+        if (mode != KeyboardMode.ASK) return
+        // 剪贴板分析的结果走文本重新生成；截图识别的结果重新识别同一张图
+        if (replySource.isNotBlank()) generateReplyOptions()
+        else lastVisionUri?.let { handlePickedImage(it) }
     }
 
     override fun selectReplyOption(text: String) {
@@ -1223,10 +1520,24 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
      */
     private fun replaceCurrentFieldWithAiOption(replacement: String) {
         val connection = currentInputConnection ?: return
-        val before = connection.getTextBeforeCursor(Int.MAX_VALUE, 0)?.length ?: 0
-        val after = connection.getTextAfterCursor(Int.MAX_VALUE, 0)?.length ?: 0
-        if (before > 0 || after > 0) connection.deleteSurroundingText(before, after)
-        connection.commitText(replacement, 1)
+        // Prefer replacing only the span this keyboard inserted (a prior option
+        // or dictation); pre-existing text typed by the user must survive.
+        val trackedLength = lastCommittedText
+            ?.takeIf { lastCommitConnection === connection }
+            ?.length ?: 0
+        // 不能用 Int.MAX_VALUE 取全文：个别 ROM 的本地 BaseInputConnection 会因
+        // 「光标位置 + 长度」整型溢出申请 4GB 内存直接 OOM 闪退。聊天输入框远小于 2048。
+        val before = connection.getTextBeforeCursor(2048, 0)?.length ?: 0
+        val after = connection.getTextAfterCursor(2048, 0)?.length ?: 0
+        val deleteBefore = if (trackedLength in 1..before) trackedLength else before
+        val deleteAfter = if (trackedLength > 0) 0 else after
+        runCatching {
+            if (deleteBefore > 0 || deleteAfter > 0) connection.deleteSurroundingText(deleteBefore, deleteAfter)
+            connection.commitText(replacement, 1)
+        }.onSuccess {
+            lastCommittedText = replacement
+            lastCommitConnection = connection
+        }
     }
 
     override fun deleteClipboard(entry: ClipboardEntry) {
@@ -1744,9 +2055,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 if (isCurrentVoiceSession(sessionId, sessionMode)) activeVoiceMode = null
                 return@launch
             }
-            text.forEach { character ->
+            var typewriterIndex = 0
+            while (typewriterIndex < text.length) {
                 if (!isCurrentVoiceSession(sessionId, sessionMode)) return@launch
-                connection.commitText(character.toString(), 1)
+                // Advance by code point: an emoji must never be split into two
+                // surrogate-half commits.
+                val codePoint = text.codePointAt(typewriterIndex)
+                connection.commitText(String(Character.toChars(codePoint)), 1)
+                typewriterIndex += Character.charCount(codePoint)
                 delay(TYPEWRITER_CHARACTER_DELAY_MS)
             }
             lastCommittedText = text
@@ -2001,6 +2317,11 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 commitTextAndPredict(value)
             }
         } else if (mode == KeyboardMode.SYMBOLS && englishBuffer.isNotBlank()) {
+            commitEnglishComposition(false)
+            commitTextAndPredict(value)
+        } else if (mode == KeyboardMode.ENGLISH && englishBuffer.isNotEmpty()) {
+            // The emoji panel and the @ key reach this path with a live English
+            // composition; a direct commit would let editors drop the letters.
             commitEnglishComposition(false)
             commitTextAndPredict(value)
         } else commitTextAndPredict(value)
@@ -2827,6 +3148,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     companion object {
         private const val TAG = "WeikeIme"
+        /** 内置语音识别通道（小米 MiMo）。构建时从未跟踪的本地配置或环境变量注入密钥。 */
+        private val BUILTIN_ASR_CONFIG = ModelEndpointConfig(
+            url = "https://api.xiaomimimo.com/v1",
+            apiKey = BuildConfig.MIMO_ASR_API_KEY,
+            model = "mimo-v2.5-asr",
+            provider = CloudProvider.XIAOMI_MIMO
+        )
         @Volatile private var retainedKeyboardMode: KeyboardMode? = null
         private const val MINIMUM_RECORDING_MS = 700L
         private const val MINIMUM_POLISHED_RECORDING_MS = 350L
@@ -2849,6 +3177,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         private const val DOUBLE_SPACE_PERIOD_WINDOW_MS = 350L
         private const val RECENT_CLIPBOARD_WINDOW_MS = 15_000L
         private const val QUICK_PASTE_VISIBLE_WINDOW_MS = 5_000L
+        private const val DICTATION_PARTIAL_INTERVAL_MS = 1_400L
         private val AUTO_CAPITALIZE_AFTER = setOf('.', '!', '?', '。', '！', '？', '\n')
         private const val LANDSCAPE_OVERLAY_HEIGHT_DP = 258
         private const val IME_STATE_PREFERENCES = "ime_view_state"
@@ -2859,6 +3188,12 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         const val ACTION_CLEAR_RIME_LEARNING = "com.weike.ime.action.CLEAR_RIME_LEARNING"
         const val ACTION_CLEAR_PREDICTION_LEARNING = "com.weike.ime.action.CLEAR_PREDICTION_LEARNING"
         const val ACTION_RELOAD_RIME_BUNDLE = "com.weike.ime.action.RELOAD_RIME_BUNDLE"
+        const val ACTION_IMAGE_PICKED = "com.weike.ime.action.IMAGE_PICKED"
+
+        /** 相册选图中转页与 IME 同进程，直接经静态变量交接 URI；
+         * 广播仅作门铃（不带 data，避开 IntentFilter 数据匹配的兼容差异）。 */
+        @Volatile
+        var pendingImageUri: android.net.Uri? = null
     }
 
     /** Kept only in memory and only long enough to bridge an IME view recreation. */

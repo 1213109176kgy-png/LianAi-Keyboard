@@ -12,6 +12,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
@@ -43,7 +44,10 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
+import com.weike.ime.ui.SubscriptionViews
+import com.weike.ime.data.PendingPurchase
 import com.weike.ime.data.AppContainer
 import com.weike.ime.data.AppSettingsRepository
 import com.weike.ime.data.AsrProtocol
@@ -70,15 +74,25 @@ import com.weike.ime.ime.WeikeInputMethodService
 import com.weike.ime.network.MimoTextPolisher
 import com.weike.ime.network.MimoApiConfig
 import com.weike.ime.network.ModelCatalog
-import com.weike.ime.speech.RoutedAsrClient
+import com.weike.ime.network.UpdateClient
+import com.weike.ime.network.UserAuthClient
+import com.weike.ime.network.SubscriptionClient
+import com.weike.ime.network.SubscriptionPlan
+import com.weike.ime.network.SubscriptionApiException
+import java.io.File
+import kotlinx.coroutines.Job
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
     private enum class Page {
-        ACCOUNT, PROFILE, SETTINGS, CLOUD, ABOUT, USAGE_GUIDE,
+        ACCOUNT, PROFILE, SUBSCRIPTION, SETTINGS, CLOUD, ABOUT, USAGE_GUIDE,
         LAYOUT, KEY_EFFECTS, AUXILIARY_INPUT, TOOLBAR, KEYBOARD_MANAGEMENT,
         CLIPBOARD_SETTINGS, LOCAL_DATA, OPTIMIZE_INPUT, PERMISSION_MANAGEMENT, TEST
     }
@@ -543,6 +557,14 @@ class MainActivity : AppCompatActivity() {
     private var latestNineKeySymbols: List<String> = emptyList()
     private var dragHighlight: View? = null
     private var dragSource: View? = null
+    /** Set when a newer release is known; drives the profile hint and the update dialog. */
+    private var pendingUpdate: UpdateClient.UpdateInfo? = null
+    private var versionRowDetail: TextView? = null
+    private val userAuthClient by lazy { UserAuthClient() }
+    private val subscriptionClient by lazy { SubscriptionClient() }
+    private var orderPollJob: Job? = null
+    private var purchaseBusy = false
+    private var paymentStatusText: TextView? = null
     private val pagePrimary: Int get() = getColor(R.color.weike_accent)
     private val managementLogoBlue = Color.rgb(0, 55, 85)
     private val appVersionName: String by lazy {
@@ -564,7 +586,7 @@ class MainActivity : AppCompatActivity() {
         if (uri == null) return@registerForActivityResult
         lifecycleScope.launch {
             val current = container.settings.keyboardLogo()
-            val path = copyLogoToPrivateStorage(uri, theme)
+            val path = withContext(Dispatchers.IO) { copyLogoToPrivateStorage(uri, theme) }
             if (path == null) {
                 Toast.makeText(this@MainActivity, "无法读取该图片", Toast.LENGTH_SHORT).show()
             } else {
@@ -599,12 +621,41 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, settingsBackCallback)
         observeData()
         lifecycleScope.launch { applyKeyboardTheme(container.settings.keyboardTheme()) }
-        showPage(Page.ACCOUNT)
+        // Silent daily check; never blocks or prompts on its own.
+        lifecycleScope.launch { fetchLatestUpdate(silent = true) }
+        showPage(if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else Page.ACCOUNT)
     }
 
-    override fun onBackPressed() {
-        if (page != Page.ACCOUNT) showPage(parentPage(page)) else super.onBackPressed()
+    override fun onResume() {
+        super.onResume()
+        pendingPurchase()?.takeIf { it.orderId.isNotBlank() }?.let { pending ->
+            container.userSession.token()?.let { startOrderPolling(pending.orderId, it) }
+        }
     }
+
+    override fun onPause() {
+        orderPollJob?.cancel()
+        super.onPause()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (isPaymentReturn(intent)) {
+            // The browser/deep link carries no proof of payment. Query only
+            // the persisted order belonging to the currently signed-in user.
+            showPage(Page.SUBSCRIPTION)
+            pendingPurchase()?.takeIf { it.orderId.isNotBlank() }?.let { pending ->
+                container.userSession.token()?.let { startOrderPolling(pending.orderId, it) }
+            }
+        }
+    }
+
+    private fun isPaymentReturn(intent: Intent?): Boolean =
+        intent?.data?.let { it.scheme == "lianai" && it.host == "payment-return" } == true
+
+    private fun pendingPurchase(): PendingPurchase? =
+        container.pendingPurchase.read(container.userSession.user()?.id)
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.action == MotionEvent.ACTION_DOWN) {
@@ -652,6 +703,7 @@ class MainActivity : AppCompatActivity() {
         val nextView = when (next) {
                 Page.ACCOUNT -> buildAccount()
                 Page.PROFILE -> buildProfile()
+                Page.SUBSCRIPTION -> buildSubscriptionPage()
                 Page.SETTINGS -> buildSettingsHub()
                 Page.CLOUD -> buildCloudConfiguration()
                 Page.ABOUT -> buildAbout()
@@ -698,6 +750,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun parentPage(current: Page): Page = when (current) {
         Page.PROFILE, Page.TEST -> Page.ACCOUNT
+        Page.SUBSCRIPTION -> Page.PROFILE
         Page.SETTINGS, Page.ABOUT, Page.USAGE_GUIDE -> Page.PROFILE
         Page.CLOUD -> cloudReturnPage
         Page.ACCOUNT -> Page.ACCOUNT
@@ -709,11 +762,13 @@ class MainActivity : AppCompatActivity() {
         addView(LinearLayout(this@MainActivity).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(16))
-            addView(TextView(this@MainActivity).apply {
-                text = "♥"
-                textSize = 24f
-                setTextColor(pagePrimary)
-            })
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.logo_lianai_app)
+                contentDescription = "恋爱键盘 Logo"
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = roundedBackground(Color.WHITE, 12)
+                clipToOutline = true
+            }, LinearLayout.LayoutParams(dp(38), dp(38)))
             addView(TextView(this@MainActivity).apply {
                 text = "恋爱键盘"
                 textSize = 14f
@@ -765,6 +820,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildProfile(): View = screen {
+        val sessionUser = container.userSession.user()
         addView(TextView(this@MainActivity).apply {
             text = "个人中心"
             gravity = Gravity.CENTER
@@ -789,19 +845,45 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), 0, 0, 0)
                 addView(TextView(this@MainActivity).apply {
-                    text = "恋爱达人"
+                    text = sessionUser?.maskedPhone ?: "恋爱达人"
                     textSize = 14f
                     typeface = Typeface.DEFAULT_BOLD
                     setTextColor(Color.WHITE)
                 })
                 addView(TextView(this@MainActivity).apply {
-                    text = "恋爱键盘 · 让每一句话都充满温度"
+                    text = if (sessionUser != null) "已登录 · 购买订阅无需再次验证"
+                    else "恋爱键盘 · 登录后可购买订阅套餐"
                     textSize = 12f
                     setTextColor(Color.argb(225, 255, 255, 255))
                 })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         })
 
+        addView(section("订阅"))
+        addView(card().apply {
+            addView(
+                actionRow(
+                    "订阅套餐",
+                    if (sessionUser != null) "查看套餐与订阅状态" else "购买套餐需先登录"
+                ) { showPage(Page.SUBSCRIPTION) }
+            )
+        })
+        addView(section("账号"))
+        addView(card().apply {
+            if (sessionUser == null) {
+                addView(actionRow("登录 / 注册", "仅购买订阅套餐时需要登录") { showLoginDialog() })
+            } else {
+                addView(actionRow("手机账号", sessionUser.maskedPhone) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "账号 ${sessionUser.phone}，登录状态有效期内无需重复登录",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                })
+                addDivider(this)
+                addView(actionRow("退出登录", "清除本机登录状态", destructive = true) { confirmLogout() })
+            }
+        })
         addView(section("功能与设置"))
         addView(card().apply {
             addView(actionRow("设置", "键盘、AI、数据与权限") { showPage(Page.SETTINGS) })
@@ -820,8 +902,183 @@ class MainActivity : AppCompatActivity() {
         })
         addView(section("版本管理"))
         addView(card().apply {
-            addView(actionRow("版本管理", "当前版本 $appVersionName") { showVersionManagementDialog() })
+            val row = actionRow("版本管理", versionManagementHint()) { showVersionManagementDialog() }
+            // actionRow renders [title, detail] inside its first child column.
+            versionRowDetail = (row.getChildAt(0) as? LinearLayout)?.getChildAt(1) as? TextView
+            addView(row)
         })
+    }
+
+    private fun buildSubscriptionPage(): View = screen {
+        val views = SubscriptionViews(this@MainActivity)
+        addView(views.header { showPage(Page.PROFILE) })
+        val statusHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        addView(statusHost)
+        statusHost.addView(views.loading("正在获取订阅状态…"))
+
+        paymentStatusText = null
+        pendingPurchase()?.let { pending ->
+            val (pendingCard, statusText) = views.pendingCard(pending,
+                onResume = { resumePurchase(pending) },
+                onQuery = { container.userSession.token()?.let { startOrderPolling(pending.orderId, it) } })
+            paymentStatusText = statusText
+            addView(pendingCard, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
+        }
+        addView(views.section())
+        val plansHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        addView(plansHost)
+        plansHost.addView(views.loading("正在加载套餐…"))
+
+        lifecycleScope.launch {
+            val token = container.userSession.token()
+            val statusResult = token?.let { subscriptionClient.subscription(it) }
+            statusHost.removeAllViews()
+            statusHost.addView(views.statusCard(statusResult?.getOrNull(), token != null, statusResult?.isFailure == true))
+
+            val plansResult = subscriptionClient.plans()
+            val plans = plansResult.getOrDefault(emptyList())
+            val alipayEnabled = subscriptionClient.alipayEnabled().getOrDefault(false)
+            plansHost.removeAllViews()
+            if (plans.isEmpty()) {
+                plansHost.addView(views.empty(if (plansResult.isFailure) "套餐加载失败，请稍后重试" else "暂无可购买的套餐") {
+                    showPage(Page.SUBSCRIPTION)
+                })
+                return@launch
+            }
+            plans.forEachIndexed { index, plan ->
+                plansHost.addView(views.planCard(plan, alipayEnabled) { startPurchase(plan) },
+                    margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = if (index > 0) 12 else 0))
+            }
+        }
+    }
+
+    private fun startPurchase(plan: SubscriptionPlan) {
+        if (purchaseBusy) return
+        val token = container.userSession.token()
+        if (token == null) {
+            Toast.makeText(this, "请先登录后再购买", Toast.LENGTH_SHORT).show()
+            showLoginDialog(onSuccess = { showPage(Page.SUBSCRIPTION) })
+            return
+        }
+        SubscriptionViews(this).showConfirmation(plan) { createOrderAndPay(plan, token) }
+    }
+
+    private fun createOrderAndPay(plan: SubscriptionPlan, token: String, retryPurchase: PendingPurchase? = null) {
+        if (purchaseBusy) return
+        val userId = container.userSession.user()?.id ?: return
+        // A newly selected plan always starts a new order. Only an explicit
+        // retry of a request with no response reuses its idempotency key.
+        val pending = retryPurchase?.takeIf { it.userId == userId && it.plan.id == plan.id }
+            ?: PendingPurchase(userId, UUID.randomUUID().toString(), plan)
+        orderPollJob?.cancel()
+        container.pendingPurchase.save(pending)
+        purchaseBusy = true
+        lifecycleScope.launch {
+            try {
+                subscriptionClient.createOrder(token, pending.plan.id, pending.requestId)
+                    .onSuccess { order ->
+                        if (order.free || order.status == "paid") {
+                            container.pendingPurchase.clear()
+                            Toast.makeText(this@MainActivity, "「${pending.plan.name}」已开通", Toast.LENGTH_LONG).show()
+                            showPage(Page.SUBSCRIPTION)
+                        } else if (order.status in setOf("expired", "closed")) {
+                            container.pendingPurchase.clear()
+                            Toast.makeText(this@MainActivity, "订单已关闭，请重新购买", Toast.LENGTH_LONG).show()
+                            showPage(Page.SUBSCRIPTION)
+                        } else {
+                            val current = pending.copy(orderId = order.orderId, payUrl = order.payUrl.orEmpty())
+                            container.pendingPurchase.save(current)
+                            showPage(Page.SUBSCRIPTION)
+                            openPayment(current.payUrl)
+                        }
+                    }.onFailure { error ->
+                        // A definitive client error did not create an order.
+                        // Network/server failures retain the idempotency key for retry.
+                        if (error is SubscriptionApiException && error.statusCode in 400..499) container.pendingPurchase.clear()
+                        Toast.makeText(this@MainActivity, error.message ?: "下单失败，请重试", Toast.LENGTH_LONG).show()
+                        showPage(Page.SUBSCRIPTION)
+                    }
+            } finally { purchaseBusy = false }
+        }
+    }
+
+    private fun openPayment(url: String) {
+        val uri = Uri.parse(url)
+        if (uri.scheme != "https" || uri.host !in setOf("openapi.alipay.com", "openapi.alipaydev.com")) {
+            Toast.makeText(this, "支付地址无效，请查询订单或联系管理员", Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+            .onFailure { Toast.makeText(this, "无法打开支付页面，可以稍后继续付款", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun resumePurchase(pending: PendingPurchase) {
+        val token = container.userSession.token() ?: return
+        if (pending.orderId.isBlank()) {
+            createOrderAndPay(pending.plan, token, pending)
+            return
+        }
+        if (purchaseBusy) return
+        purchaseBusy = true
+        orderPollJob?.cancel()
+        lifecycleScope.launch {
+            try {
+                subscriptionClient.order(token, pending.orderId)
+                    .onSuccess { order ->
+                        if (!handlePaymentStatus(order.status)) {
+                            order.payUrl?.let { openPayment(it) }
+                                ?: Toast.makeText(this@MainActivity, "订单已超时，请查询付款结果", Toast.LENGTH_LONG).show()
+                        }
+                    }.onFailure { error ->
+                        paymentStatusText?.text = error.message ?: "订单查询失败，请重试"
+                        Toast.makeText(this@MainActivity, error.message ?: "订单查询失败，请重试", Toast.LENGTH_LONG).show()
+                    }
+            } finally { purchaseBusy = false }
+        }
+    }
+
+    private fun handlePaymentStatus(status: String): Boolean {
+        if (status !in setOf("paid", "expired", "closed")) return false
+        orderPollJob?.cancel()
+        container.pendingPurchase.clear()
+        Toast.makeText(this, when (status) {
+            "paid" -> "支付成功，套餐已开通"
+            "closed" -> "订单已关闭，可重新购买"
+            else -> "订单已超时，可重新购买；若已付款，请联系管理员核实"
+        }, Toast.LENGTH_LONG).show()
+        showPage(Page.SUBSCRIPTION)
+        return true
+    }
+
+    private fun startOrderPolling(orderId: String, token: String) {
+        orderPollJob?.cancel()
+        orderPollJob = lifecycleScope.launch {
+            repeat(80) { attempt ->
+                if (attempt > 0) delay(3000)
+                val current = pendingPurchase()
+                if (current?.orderId != orderId) return@launch
+                val result = subscriptionClient.order(token, orderId)
+                val order = result.getOrNull()
+                if (order != null) {
+                    if (handlePaymentStatus(order.status)) return@launch
+                    paymentStatusText?.text = "尚未确认付款。已付款请稍候，也可点击「查询结果」。"
+                } else {
+                    val error = result.exceptionOrNull()
+                    paymentStatusText?.text = error?.message ?: "网络异常，请稍后查询"
+                    if (error is SubscriptionApiException && error.statusCode == 404) {
+                        container.pendingPurchase.clear()
+                        Toast.makeText(this@MainActivity, "订单不存在，请重新购买", Toast.LENGTH_LONG).show()
+                        showPage(Page.SUBSCRIPTION)
+                        return@launch
+                    }
+                    if (error is SubscriptionApiException && error.statusCode == 401) {
+                        Toast.makeText(this@MainActivity, "登录已过期，请重新登录后查询订单", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                }
+            }
+            paymentStatusText?.text = "暂未确认到账。可以继续付款或手动查询结果。"
+        }
     }
 
     private fun buildLayoutDisplay(): View = screen {
@@ -995,7 +1252,7 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch { cursorSlider.setChecked(container.settings.cursorSliderEnabled()) }
         }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
         addView(illustratedOptionCard("Logo 定制", operationGuide("选择键盘左上角的品牌 Logo", "自定义模式可分别选择暗色和亮色键盘图片")) {
-            val options = KeyboardLogoStyle.entries.toList()
+            val options = listOf(KeyboardLogoStyle.VERTICK, KeyboardLogoStyle.CUSTOM)
             lateinit var customImageChoices: LinearLayout
             val control = SegmentedControl(this@MainActivity, options.map { it.displayName }, 0) { index ->
                 val selectedStyle = options[index]
@@ -1082,7 +1339,7 @@ class MainActivity : AppCompatActivity() {
                 layoutControl.setSelected(layouts.indexOf(layout).coerceAtLeast(0))
             }
         }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
-        addView(illustratedOptionCard("九宫格符号", operationGuide("点击符号可编辑", "长按右侧拖动柄可调整侧边栏顺序")) {
+        addView(illustratedOptionCard("九宫格符号", operationGuide("点击符号可编辑", "长按右侧拖动柄可调整符号顺序", "九宫格逗号键的弹出面板会按此顺序显示")) {
             nineKeySymbolsList = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
             addView(nineKeySymbolsList)
         }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
@@ -1293,55 +1550,6 @@ class MainActivity : AppCompatActivity() {
                 relationPromptInput.setText(prompts.getValue(selectedRelation))
             }
         })
-        addView(cloudSection("其他配置"))
-        addView(collapsibleAsrConfiguration())
-    }
-
-    private fun collapsibleAsrConfiguration(): View = card().apply {
-        setPadding(dp(16), dp(6), dp(16), dp(6))
-        val content = providerConfigurationCard(
-            isAsr = true,
-            load = { container.settings.cloudApiSettings.first().asr },
-            loadProvider = { container.settings.asrProvider() },
-            save = { config, provider -> container.settings.saveAsrApi(config, provider) },
-            test = { config -> RoutedAsrClient(endpointProvider = { config }).testConnection() }
-        ).apply {
-            visibility = View.GONE
-            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 4)
-        }
-        val chevron = ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_lucide_chevron_down)
-            setColorFilter(getColor(R.color.weike_muted))
-            contentDescription = "展开 ASR 接口配置"
-        }
-        val header = LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            isClickable = true
-            isFocusable = true
-            setPadding(0, dp(8), 0, dp(8))
-            addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.ic_lucide_mic)
-                setColorFilter(getColor(R.color.weike_muted))
-                contentDescription = null
-            }, LinearLayout.LayoutParams(dp(20), dp(20)))
-            addView(TextView(this@MainActivity).apply {
-                text = "ASR 接口（暂时用不到，不用填）"
-                textSize = 14f
-                setTextColor(getColor(R.color.weike_text))
-                typeface = Typeface.DEFAULT_BOLD
-                setPadding(dp(10), 0, dp(8), 0)
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { gravity = Gravity.CENTER_VERTICAL })
-            addView(chevron, LinearLayout.LayoutParams(dp(20), dp(20)))
-            setOnClickListener {
-                val expanding = content.visibility != View.VISIBLE
-                content.visibility = if (expanding) View.VISIBLE else View.GONE
-                chevron.rotation = if (expanding) 180f else 0f
-                chevron.contentDescription = if (expanding) "收起 ASR 接口配置" else "展开 ASR 接口配置"
-            }
-        }
-        addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(64)))
-        addView(content)
     }
 
     private fun buildSettingsHub(): View = screen {
@@ -1514,11 +1722,369 @@ class MainActivity : AppCompatActivity() {
         background = roundedBackground(getColor(R.color.weike_panel), 16)
     }
 
+    private fun versionManagementHint(): String {
+        val newer = pendingUpdate?.versionName
+            ?: getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE).getString(KEY_PENDING_VERSION, null)
+        return newer?.let { "有新版本 $it，点击查看" } ?: "当前版本 $appVersionName"
+    }
+
+    private fun refreshVersionRowHint() {
+        versionRowDetail?.text = versionManagementHint()
+    }
+
+    private fun localVersionCode(): Long = packageManager.getPackageInfo(packageName, 0).longVersionCode
+
+    /** One silent check per day; the dialog's manual button always runs a fresh check. */
+    private suspend fun fetchLatestUpdate(silent: Boolean): Result<UpdateClient.UpdateInfo?> {
+        val preferences = getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
+        if (silent &&
+            System.currentTimeMillis() - preferences.getLong(KEY_LAST_CHECK_AT, 0L) < UPDATE_CHECK_INTERVAL_MS
+        ) {
+            refreshVersionRowHint()
+            return Result.success(pendingUpdate)
+        }
+        val result = UpdateClient().checkLatest().map { info ->
+            val update = info.takeIf { it.versionCode > localVersionCode() }
+            pendingUpdate = update
+            preferences.edit().apply {
+                putLong(KEY_LAST_CHECK_AT, System.currentTimeMillis())
+                if (update == null) remove(KEY_PENDING_VERSION) else putString(KEY_PENDING_VERSION, update.versionName)
+            }.apply()
+            update
+        }
+        refreshVersionRowHint()
+        return result
+    }
+
+    private fun showLoginDialog(onSuccess: (() -> Unit)? = null) {
+        var registerMode = false
+        var busy = false
+        val radius = dp(22).toFloat()
+
+        fun fieldBackground(focused: Boolean = false) = GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = dp(14).toFloat()
+            setStroke(dp(1), if (focused) pagePrimary else Color.rgb(240, 226, 231))
+        }
+
+        val phoneInput = EditText(this).apply {
+            hint = "手机号"
+            inputType = InputType.TYPE_CLASS_PHONE
+            maxLines = 1
+            textSize = 15f
+            setTextColor(getColor(R.color.weike_text))
+            setHintTextColor(getColor(R.color.weike_muted))
+            background = fieldBackground()
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+        }
+        val passwordInput = EditText(this).apply {
+            hint = "密码（8~64 位）"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            maxLines = 1
+            textSize = 15f
+            setTextColor(getColor(R.color.weike_text))
+            setHintTextColor(getColor(R.color.weike_muted))
+            background = fieldBackground()
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+        }
+        val statusView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.rgb(255, 71, 87))
+            setPadding(dp(4), dp(10), dp(4), 0)
+            visibility = View.GONE
+        }
+        val actionButton = compactFormActionButton("登录", true) { }
+        val modeSwitch = TextView(this).apply {
+            textSize = 13f
+            setTextColor(pagePrimary)
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(16), dp(4), dp(4))
+        }
+
+        val titleView = TextView(this).apply {
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        phoneInput.setOnFocusChangeListener { _, hasFocus -> phoneInput.background = fieldBackground(hasFocus) }
+        passwordInput.setOnFocusChangeListener { _, hasFocus -> passwordInput.background = fieldBackground(hasFocus) }
+        val subtitleView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.argb(225, 255, 255, 255))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val closeButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_lucide_x)
+            setColorFilter(Color.WHITE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            contentDescription = "关闭"
+        }
+        val header = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
+            ).apply {
+                cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+            }
+            val textColumn = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(22), dp(20), dp(52), dp(18))
+                addView(titleView)
+                addView(subtitleView)
+            }
+            addView(
+                textColumn,
+                android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+            addView(
+                closeButton,
+                android.widget.FrameLayout.LayoutParams(dp(38), dp(38), Gravity.TOP or Gravity.END).apply {
+                    topMargin = dp(10)
+                    marginEnd = dp(10)
+                }
+            )
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, radius, radius, radius, radius)
+            }
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            addView(phoneInput, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 10))
+            addView(passwordInput, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(statusView)
+            addView(actionButton, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 10))
+            addView(modeSwitch, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(body)
+        }
+
+        val dialog = android.app.Dialog(this)
+        fun applyMode() {
+            titleView.text = if (registerMode) "注册账号" else "登录账号"
+            subtitleView.text = if (registerMode) "注册成功后将自动登录，无需再次输入" else "购买订阅套餐前需要先登录"
+            actionButton.text = if (registerMode) "注册并登录" else "登录"
+            modeSwitch.text = if (registerMode) "已有账号？直接登录" else "还没有账号？免费注册"
+        }
+        actionButton.setOnClickListener {
+            if (busy) return@setOnClickListener
+            val phone = phoneInput.text.toString().trim()
+            val password = passwordInput.text.toString()
+            val localError = when {
+                !Regex("^1\\d{10}$").matches(phone) -> "请输入正确的 11 位手机号"
+                password.length < 8 -> "密码至少 8 位"
+                else -> null
+            }
+            if (localError != null) {
+                statusView.visibility = View.VISIBLE
+                statusView.text = localError
+                return@setOnClickListener
+            }
+            busy = true
+            actionButton.isEnabled = false
+            actionButton.text = if (registerMode) "注册中..." else "登录中..."
+            statusView.visibility = View.GONE
+            lifecycleScope.launch {
+                val result = if (registerMode) userAuthClient.register(phone, password)
+                else userAuthClient.login(phone, password)
+                result.onSuccess { session ->
+                    container.userSession.save(session.token, session.user)
+                    dialog.dismiss()
+                    Toast.makeText(this@MainActivity, "已登录 ${session.user.maskedPhone}", Toast.LENGTH_SHORT).show()
+                    (onSuccess ?: { showPage(Page.PROFILE) }).invoke()
+                }.onFailure { error ->
+                    busy = false
+                    actionButton.isEnabled = true
+                    actionButton.text = if (registerMode) "注册并登录" else "登录"
+                    statusView.visibility = View.VISIBLE
+                    statusView.text = error.message ?: "网络不可用，请稍后重试"
+                }
+            }
+        }
+        modeSwitch.setOnClickListener {
+            registerMode = !registerMode
+            statusView.visibility = View.GONE
+            applyMode()
+        }
+        closeButton.setOnClickListener { dialog.dismiss() }
+
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setContentView(android.widget.FrameLayout(this).apply {
+            setPadding(dp(26), 0, dp(26), 0)
+            addView(card, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        })
+        dialog.window?.apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                    android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+            )
+        }
+        applyMode()
+        dialog.show()
+    }
+
+    private fun confirmLogout() {
+        AlertDialog.Builder(this)
+            .setTitle("退出登录？")
+            .setMessage("本机登录状态将被清除；订阅权益不受影响，下次购买前重新登录即可。")
+            .setPositiveButton("退出") { _, _ -> performLogout() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun performLogout() {
+        val token = container.userSession.token() ?: return
+        lifecycleScope.launch {
+            runCatching { userAuthClient.logout(token) }
+            orderPollJob?.cancel()
+            container.pendingPurchase.clear()
+            container.userSession.clear()
+            Toast.makeText(this@MainActivity, "已退出登录", Toast.LENGTH_SHORT).show()
+            showPage(Page.PROFILE)
+        }
+    }
+
     private fun showVersionManagementDialog() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(2), dp(20), 0)
+        }
+        val status = TextView(this).apply {
+            textSize = 13f
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setTextColor(getColor(R.color.weike_text))
+        }
+        val notes = TextView(this).apply {
+            textSize = 12f
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setTextColor(getColor(R.color.weike_muted))
+            visibility = View.GONE
+        }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 10_000
+            progress = 0
+            visibility = View.GONE
+        }
+        val primary = compactFormActionButton("检查更新", true) { }
+        var downloadedFile: File? = null
+
+        fun renderUpdate(update: UpdateClient.UpdateInfo) {
+            status.text = "当前版本：$appVersionName\n发现新版本：${update.versionName}"
+            if (update.notes.isNotBlank()) {
+                notes.text = update.notes.take(600)
+                notes.visibility = View.VISIBLE
+            }
+        }
+
+        fun installApk(file: File) {
+            if (!packageManager.canRequestPackageInstalls()) {
+                status.text = "当前版本：$appVersionName\n下载完成。请先允许本应用安装未知应用，授权后回来再次点击按钮。"
+                primary.isEnabled = true
+                primary.text = "去授权"
+                primary.setOnClickListener {
+                    runCatching {
+                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                    }
+                }
+                return
+            }
+            status.text = "当前版本：$appVersionName\n下载完成，请在系统安装界面确认更新。"
+            runCatching {
+                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
+                startActivity(Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                })
+            }.onFailure { Toast.makeText(this@MainActivity, "无法启动系统安装器", Toast.LENGTH_SHORT).show() }
+        }
+
+        fun bindDownload(update: UpdateClient.UpdateInfo) {
+            primary.isEnabled = true
+            primary.text = "下载并安装"
+            primary.setOnClickListener {
+                val existing = downloadedFile
+                if (existing?.isFile == true) {
+                    installApk(existing)
+                    return@setOnClickListener
+                }
+                primary.isEnabled = false
+                primary.text = "下载中..."
+                progress.visibility = View.VISIBLE
+                progress.progress = 0
+                status.text = "当前版本：$appVersionName\n正在下载 ${update.versionName}..."
+                val target = File(getExternalFilesDir("updates"), "lianai-${update.versionName}.apk")
+                lifecycleScope.launch {
+                    UpdateClient().downloadApk(update, target) { p ->
+                        runOnUiThread {
+                            progress.progress = (p.fraction * 10_000).roundToInt()
+                            status.text = "当前版本：$appVersionName\n正在下载 ${(p.fraction * 100).roundToInt()}%"
+                        }
+                    }.onSuccess { file ->
+                        downloadedFile = file
+                        progress.visibility = View.GONE
+                        installApk(file)
+                    }.onFailure { error ->
+                        progress.visibility = View.GONE
+                        status.text = "当前版本：$appVersionName\n\n下载失败：${error.message ?: "网络不可用"}"
+                        bindDownload(update)
+                    }
+                }
+            }
+        }
+
+        fun bindCheck() {
+            primary.isEnabled = true
+            primary.text = "检查更新"
+            primary.setOnClickListener {
+                primary.isEnabled = false
+                primary.text = "检查中..."
+                status.text = "当前版本：$appVersionName\n\n正在检查更新..."
+                lifecycleScope.launch {
+                    fetchLatestUpdate(silent = false)
+                        .onSuccess { update ->
+                            if (update == null) {
+                                notes.visibility = View.GONE
+                                status.text = "当前版本：$appVersionName\n\n已是最新版本。"
+                                bindCheck()
+                            } else {
+                                downloadedFile = null
+                                progress.visibility = View.GONE
+                                renderUpdate(update)
+                                bindDownload(update)
+                            }
+                        }
+                        .onFailure { error ->
+                            notes.visibility = View.GONE
+                            status.text = "当前版本：$appVersionName\n\n检查失败：${error.message ?: "网络不可用"}"
+                            bindCheck()
+                        }
+                }
+            }
+        }
+
+        val known = pendingUpdate
+        if (known == null) {
+            status.text = "当前版本：$appVersionName\n\n点击“检查更新”获取最新版本信息。"
+            bindCheck()
+        } else {
+            renderUpdate(known)
+            bindDownload(known)
+        }
+        content.addView(status, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 6, bottom = 10))
+        content.addView(notes, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 12))
+        content.addView(progress, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(8), bottom = 12))
+        content.addView(primary, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
         AlertDialog.Builder(this)
             .setTitle("版本管理")
-            .setMessage("当前版本：$appVersionName\n\n后续版本升级将在这里统一管理。")
-            .setPositiveButton("知道了", null)
+            .setView(content)
+            .setNegativeButton("关闭", null)
             .show()
     }
 
@@ -2176,7 +2742,7 @@ class MainActivity : AppCompatActivity() {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
         addView(ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.app_icon)
+            setImageResource(R.drawable.logo_lianai_app)
             background = roundedBackground(Color.TRANSPARENT, 16)
             clipToOutline = true
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -2401,11 +2967,15 @@ class MainActivity : AppCompatActivity() {
         action.alpha = if (enhancedReady) 1f else 0.5f
         action.setOnClickListener {
             if (enabled) {
-                manager.disableWanxiang().onSuccess {
-                    sendBroadcast(Intent(WeikeInputMethodService.ACTION_RELOAD_RIME_BUNDLE).setPackage(packageName))
-                    showPage(Page.OPTIMIZE_INPUT)
-                }.onFailure { error ->
-                    Toast.makeText(this@MainActivity, error.message ?: "移除失败", Toast.LENGTH_LONG).show()
+                lifecycleScope.launch {
+                    // Removing the model deletes a ~400 MB file; keep it off the main thread.
+                    val result = withContext(Dispatchers.IO) { manager.disableWanxiang() }
+                    result.onSuccess {
+                        sendBroadcast(Intent(WeikeInputMethodService.ACTION_RELOAD_RIME_BUNDLE).setPackage(packageName))
+                        showPage(Page.OPTIMIZE_INPUT)
+                    }.onFailure { error ->
+                        Toast.makeText(this@MainActivity, error.message ?: "移除失败", Toast.LENGTH_LONG).show()
+                    }
                 }
                 return@setOnClickListener
             }
@@ -2629,7 +3199,14 @@ class MainActivity : AppCompatActivity() {
                 textSize = 14f
                 setTextColor(getColor(if (destructive) android.R.color.holo_red_dark else R.color.weike_text))
             })
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            if (detail.isNotBlank()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = detail
+                    textSize = 12f
+                    setTextColor(getColor(R.color.weike_muted))
+                })
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_lucide_chevron_right)
             setColorFilter(getColor(R.color.weike_muted))
@@ -2787,4 +3364,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val UPDATE_PREFERENCES = "update_check"
+        const val KEY_LAST_CHECK_AT = "last_check_at"
+        const val KEY_PENDING_VERSION = "pending_version"
+        const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
+    }
 }

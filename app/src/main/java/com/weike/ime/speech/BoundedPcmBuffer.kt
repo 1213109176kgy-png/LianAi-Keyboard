@@ -31,4 +31,10 @@ class BoundedPcmBuffer(private val maxBytes: Int) {
         output.reset()
         truncated = false
     }
+
+    /** 最近 maxBytes 字节的非破坏性快照，用于边说边识别的增量上屏。 */
+    fun tail(maxBytes: Int): ByteArray = synchronized(lock) {
+        val all = output.toByteArray()
+        if (all.size <= maxBytes) all else all.copyOfRange(all.size - maxBytes, all.size)
+    }
 }

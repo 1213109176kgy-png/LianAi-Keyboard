@@ -69,9 +69,25 @@ ASR 语音接口当前不是必填项，默认折叠；只使用文字键盘、�
 
 请勿在 Issue、截图或聊天记录中公开 API Key。调用费用和内容政策由你所选择的模型服务商决定。
 
-## 本地构建
+## 管理后台与支付服务源码
+
+Android App 位于 `app/`；React 管理后台、Express API、支付宝支付与订单管理位于 [`admin/`](admin/README.md)。
+
+```bash
+cd admin
+npm ci
+npm run dev
+```
+
+后台支持套餐配置、支付宝下单与回调、订单查询、人工补单和权益入账。安装及部署说明见 [`admin/README.md`](admin/README.md)。数据库、支付密钥、OSS 密钥和本地配置不随源码提交，需在各自环境中配置。
+
+品牌原图位于 `branding/logo-source.png`，运行 `python3 scripts/generate_brand_assets.py` 可重新导出 App、后台和文档使用的图标资源。
+
+## Android 本地构建
 
 环境要求：JDK 17、Android SDK 35、NDK 26.1、Gradle 8.7。
+
+内置 MiMo ASR 的凭据通过未跟踪的 `local.properties` 中的 `mimoAsrApiKey`、Gradle 同名属性或 `MIMO_ASR_API_KEY` 环境变量提供，源码默认留空。未提供时可在 App 内配置自己的 ASR 接口。注入构建的凭据会进入 APK，公开发行时应使用受控的服务端接口。
 
 ```powershell
 $env:JAVA_HOME='C:\path\to\jdk17'

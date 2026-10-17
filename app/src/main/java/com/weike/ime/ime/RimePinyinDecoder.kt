@@ -54,6 +54,9 @@ interface PinyinDecoder {
     suspend fun learnCandidate(text: String): Boolean
     suspend fun clearUserLearning(): Boolean
     suspend fun shutdown()
+
+    /** Releases the decoder's worker thread. Service teardown only; [shutdown] alone keeps the decoder restartable. */
+    suspend fun terminate()
 }
 
 /**
@@ -189,7 +192,10 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
                 Rime.exitRime()
                 userDir.deleteRecursively()
                 userDir.mkdirs()
-                // shared/build is immutable and stays available after the clear.
+                // shared/build is immutable and stays available after the clear,
+                // but user/build must be reseeded so librime maintenance cannot
+                // shadow the release prism with an empty auto-generated one.
+                installUserBuildFiles(DictionaryPackManager(appContext).activeBundleDir(), force = true)
                 startAndVerify()
             }.getOrDefault(false)
             isReady = ready
@@ -204,6 +210,12 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
             isReady = false
             statusText = "\u79bb\u7ebf\u8bcd\u5178\u672a\u52a0\u8f7d"
         }
+        // The worker thread stays alive so a dictionary reload can restart the
+        // engine in the same decoder instance. terminate() closes it on teardown.
+    }
+
+    override suspend fun terminate() {
+        shutdown()
         rimeDispatcher.close()
     }
 
