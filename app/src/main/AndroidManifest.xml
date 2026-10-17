@@ -2,6 +2,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 截图识别回复：应用内相册九宫格读取照片。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- In-app updates: hands the downloaded APK to the system installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Landscape fallback: keeps the IME surface alive on HyperOS while its
          system input window is being recreated during rotation. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -16,13 +23,27 @@
         android:theme="@style/Theme.Weike">
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lianai" android:host="payment-return" />
+            </intent-filter>
         </activity>
+
+        <!-- 相册选图中转页：直接读 MediaStore 展示九宫格，选完广播给 IME。 -->
+        <activity
+            android:name=".ImagePickerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+            android:excludeFromRecents="true" />
 
         <service
             android:name=".ime.WeikeInputMethodService"
@@ -37,5 +58,15 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

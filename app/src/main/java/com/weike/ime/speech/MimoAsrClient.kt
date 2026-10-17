@@ -4,10 +4,12 @@ import android.util.Base64
 import com.weike.ime.data.ModelEndpointConfig
 import com.weike.ime.network.MimoApiConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -31,7 +33,11 @@ class MimoAsrClient(
             return Result.failure(IllegalStateException("请先配置 ASR 接口"))
         }
         return try {
-            val audioData = Base64.encodeToString(wav(pcm), Base64.NO_WRAP)
+            // WAV 封装与 Base64 编码最长可达数 MB，放到 Default 线程，
+            // 避免听写期间每 1.4 秒一次的中间识别卡主线程。
+            val audioData = withContext(Dispatchers.Default) {
+                Base64.encodeToString(wav(pcm), Base64.NO_WRAP)
+            }
             val content = JSONArray().put(
                 JSONObject()
                     .put("type", "input_audio")
@@ -74,7 +80,9 @@ class MimoAsrClient(
             close(IllegalStateException("请先配置 ASR 接口"))
             return@callbackFlow
         }
-        val audioData = Base64.encodeToString(wav(pcm), Base64.NO_WRAP)
+        val audioData = withContext(Dispatchers.Default) {
+            Base64.encodeToString(wav(pcm), Base64.NO_WRAP)
+        }
         val content = JSONArray().put(
             JSONObject()
                 .put("type", "input_audio")
@@ -185,11 +193,25 @@ class MimoAsrClient(
         else -> value.toString().trim().takeUnless { it.equals("null", ignoreCase = true) }.orEmpty()
     }
 
-    private fun cleanTranscript(value: String): String = value
-        .replace(Regex("""(?i)\s*\bnull\b\s*$"""), "")
-        .trim()
+    private fun cleanTranscript(value: String) = cleanAsrTranscript(value)
 
     companion object {
+        /**
+         * mimo-v2.5-asr 会把转写包进 <chinese>…</chinese> 等语言标签返回，
+         * 统一在这里剥掉，中间识别与终次识别共用。
+         */
+        private val ASR_MARKUP_TAGS = Regex(
+            "(?i)</?(chinese|english|mandarin|cantonese|zh|en|transcript|audio)>"
+        )
+
+        fun cleanAsrTranscript(value: String): String = value
+            .replace(ASR_MARKUP_TAGS, "")
+            // MiMo 偶尔在中文转写结尾追加字面量 null。Java 的 \b 把汉字视为
+            // 词字符导致原正则失效，这里改用「前邻汉字」判定；英文口述里
+            // 结尾合法的 null 单词不受影响。
+            .replace(Regex("""(?i)(?<=[\u4E00-\u9FFF])\s*null\s*$"""), "")
+            .trim()
+
         fun wav(pcm: ByteArray): ByteArray {
         val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
         header.put("RIFF".toByteArray())

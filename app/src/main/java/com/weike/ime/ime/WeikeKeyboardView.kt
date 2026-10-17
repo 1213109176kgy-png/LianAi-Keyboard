@@ -42,6 +42,10 @@ interface KeyboardActions {
     fun selectMode(mode: KeyboardMode)
     fun returnToNineKeyPinyin()
     fun toggleVoice()
+    fun toggleDictation()
+    /** 长按空格等推杆式入口：按下开始，松开由 [finishDictation] 结束。 */
+    fun startDictation()
+    fun finishDictation()
     fun startPolishedVoice()
     fun setLongPressTranslation(selected: Boolean)
     fun finishVoice()
@@ -53,6 +57,7 @@ interface KeyboardActions {
     fun pasteClipboard(entry: ClipboardEntry)
     fun pasteRecentClipboard()
     fun analyzeClipboardReply()
+    fun screenshotReply()
     fun selectReplyOption(text: String)
     fun regenerateReplyOptions()
     fun dismissReplyOptions()
@@ -90,9 +95,7 @@ class WeikeKeyboardView(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val targets = mutableListOf<TouchTarget>()
     private val iconCache = android.util.SparseArray<android.graphics.drawable.Drawable>()
-    private val darkLogo = BitmapFactory.decodeResource(resources, R.drawable.vertick_white)
-    private val lightLogo = BitmapFactory.decodeResource(resources, R.drawable.vertick_black)
-    private val openLessLogo = BitmapFactory.decodeResource(resources, R.drawable.keyboard_logo_openless)
+    private val brandLogo = BitmapFactory.decodeResource(resources, R.drawable.logo_lianai_app)
 
     private var mode = KeyboardMode.PINYIN
     private var availableModes: List<KeyboardMode> = listOf(KeyboardMode.TEXT, KeyboardMode.ASK, KeyboardMode.VOICE)
@@ -110,11 +113,6 @@ class WeikeKeyboardView(
     private var nineKeyNumberPad = false
     private var symbolsUseEnglish = false
     private var nineKeySymbols: List<String> = emptyList()
-    private var nineKeySymbolScrollY = 0f
-    private var nineKeySymbolMaxScroll = 0f
-    private var nineKeySymbolViewport: RectF? = null
-    private var nineKeySymbolDragging = false
-    private var nineKeySymbolDragStart = 0f
     private var candidateScrollX = 0f
     private var candidateMaxScroll = 0f
     private var candidateDragging = false
@@ -166,6 +164,9 @@ class WeikeKeyboardView(
     private var cursorSliderEnabled = true
     private var automaticUppercase = false
     private var meter = 0f
+    private var dictationActive = false
+    /** 后台业务开关：截图识别回复是否开放。 */
+    private var screenshotReplyEnabled = false
     private var voiceMorph = 0f
     private var modeIndicator = 0f
     private var pressedBox: RectF? = null
@@ -290,9 +291,8 @@ class WeikeKeyboardView(
     }
 
     private val logo: android.graphics.Bitmap get() = when (keyboardLogoConfig.style) {
-        KeyboardLogoStyle.OPENLESS -> openLessLogo
-        KeyboardLogoStyle.CUSTOM -> if (keyboardTheme == KeyboardTheme.DARK) customDarkLogo ?: darkLogo else customLightLogo ?: lightLogo
-        KeyboardLogoStyle.VERTICK -> if (keyboardTheme == KeyboardTheme.DARK) darkLogo else lightLogo
+        KeyboardLogoStyle.CUSTOM -> if (keyboardTheme == KeyboardTheme.DARK) customDarkLogo ?: brandLogo else customLightLogo ?: brandLogo
+        KeyboardLogoStyle.OPENLESS, KeyboardLogoStyle.VERTICK -> brandLogo
     }
     private val background: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(48, 38, 43) else Color.rgb(255, 249, 250)
     private val key: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(78, 62, 69) else Color.WHITE
@@ -358,8 +358,12 @@ class WeikeKeyboardView(
         replyOptions: List<String> = this.replyOptions,
         replyLoading: Boolean = this.replyLoading,
         replyEmotion: String = this.replyEmotion,
-        enterLabel: String = this.enterLabel
+        enterLabel: String = this.enterLabel,
+        dictationActive: Boolean = this.dictationActive,
+        screenshotReplyEnabled: Boolean = this.screenshotReplyEnabled
     ) {
+        this.dictationActive = dictationActive
+        this.screenshotReplyEnabled = screenshotReplyEnabled
         val normalizedModes = modeOptions.distinct().filter { it != KeyboardMode.SYMBOLS }
             .ifEmpty { listOf(KeyboardMode.PINYIN) }
         // Symbols is a temporary sub-page of the text keyboard, not a top-right mode.
@@ -582,7 +586,6 @@ class WeikeKeyboardView(
         polishRelationViewport = null
         answerViewport = null
         clipboardViewport = null
-        nineKeySymbolViewport = null
         clipboardRows = emptyList()
         if (punctuationStripVisible) {
             modeTabs = null
@@ -686,7 +689,7 @@ class WeikeKeyboardView(
             lucide(canvas, R.drawable.ic_lucide_clipboard_list, iconSurface.centerX(), iconSurface.centerY(), dp(18), white)
             val textBox = RectF(quickPaste.left + dp(40), quickPaste.top, quickPaste.right - dp(8), quickPaste.bottom)
             val content = quickPasteRenderText.replace(Regex("\\s+"), " ").trim()
-            paint.textSize = dp(13).toFloat()
+            paint.textSize = sp(13)
             paint.typeface = Typeface.DEFAULT_BOLD
             val textWidth = paint.measureText(content)
             val elapsed = (SystemClock.elapsedRealtime() - quickPasteMotionStartedAt).coerceAtLeast(0L)
@@ -1105,7 +1108,7 @@ class WeikeKeyboardView(
         lineHeight: Float
     ): List<AnswerLine> {
         val result = mutableListOf<AnswerLine>()
-        paint.textSize = dp(sizeSp.toInt())
+        paint.textSize = sp(sizeSp.toInt())
         paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         val paragraphs = text.split('\n')
         paragraphs.forEachIndexed { paragraphIndex, paragraph ->
@@ -1190,9 +1193,24 @@ class WeikeKeyboardView(
         label(canvas, "+  粘贴TA的话", button.centerX(), button.centerY() + dp(5), 15f, Color.WHITE, Paint.Align.CENTER, true)
         target(button, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.analyzeClipboardReply() }
 
-        val tip = error?.takeIf { it.isNotBlank() } ?: "复制微信或短信中的消息后，点击上方按钮"
-        val tipColor = if (error.isNullOrBlank()) muted else accent
-        label(canvas, tip, card.centerX(), button.bottom + dp(34), 12f, tipColor, Paint.Align.CENTER)
+        if (screenshotReplyEnabled) {
+            val shotButton = RectF(card.left + dp(16), button.bottom + dp(14), card.right - dp(16), button.bottom + dp(62))
+            rounded(canvas, shotButton, dp(16), cardOptionBg)
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1); paint.color = accent
+            canvas.drawRoundRect(shotButton, dp(16).toFloat(), dp(16).toFloat(), paint)
+            paint.style = Paint.Style.FILL
+            label(canvas, "📷  截图识别回复", shotButton.centerX(), shotButton.centerY() + dp(5), 14f, accent, Paint.Align.CENTER, true)
+            target(shotButton, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.screenshotReply() }
+
+            val tipAreaTop = shotButton.bottom
+            val tip = error?.takeIf { it.isNotBlank() } ?: "没有TA的原话？直接截聊天图，AI识别后帮你回"
+            val tipColor = if (error.isNullOrBlank()) muted else accent
+            label(canvas, tip, card.centerX(), tipAreaTop + dp(28), 12f, tipColor, Paint.Align.CENTER)
+        } else {
+            val tip = error?.takeIf { it.isNotBlank() } ?: "复制微信或短信中的消息后，点击上方按钮"
+            val tipColor = if (error.isNullOrBlank()) muted else accent
+            label(canvas, tip, card.centerX(), button.bottom + dp(34), 12f, tipColor, Paint.Align.CENTER)
+        }
     }
 
     private fun drawPolishPrompt(canvas: Canvas, error: String?) {
@@ -1233,7 +1251,7 @@ class WeikeKeyboardView(
         label(canvas, draftText, card.left + dp(15), card.top + dp(32), 13f, if (visibleDraft.isBlank()) Color.rgb(214, 142, 157) else white, Paint.Align.LEFT)
         val editor = RectF(card.left + dp(12), card.top + dp(8), card.right - dp(12), card.top + dp(48))
         if (visibleDraft.isNotBlank()) {
-            paint.textSize = dp(13).toFloat()
+            paint.textSize = sp(13)
             paint.typeface = Typeface.DEFAULT
             val beforeCursor = polishDraft.substring(0, cursor) + pinyinBuffer
             val cursorX = (card.left + dp(15) + paint.measureText(beforeCursor)).coerceAtMost(editor.right - dp(2))
@@ -1312,7 +1330,6 @@ class WeikeKeyboardView(
         val bottomActionHeight = dp(58)
         val bottomReserve = keyboardBottomReserve().coerceAtLeast(dp(30)) + bottomActionHeight
         val keyHeight = (contentBottom() - top - gap - bottomReserve - gap * 3) / 4f
-        nineKeySymbolViewport = null
         val keyWidth = (width - edge * 2 - gap * 4) / 5f
         val functionKey = blend(key, muted, if (keyboardTheme == KeyboardTheme.DARK) .24f else .28f)
         fun cell(column: Int, row: Int, rowSpan: Int = 1, columnSpan: Int = 1): RectF {
@@ -1409,13 +1426,18 @@ class WeikeKeyboardView(
                 emojiPanel = true; candidateExpanded = false; invalidate()
             }
 
-            plainInputKey(1, 3, "，;:", "，")
+            plainInputKey(1, 3, "，")
             plainInputKey(2, 3, "0")
 
-            val space = cell(3, 3)
-            key(canvas, space)
-            centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
-            target(space, keySound = true) { actions.pressTextSpace(true) }
+        val space = cell(3, 3)
+        key(canvas, space)
+        centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
+        target(
+            space,
+            keySound = true,
+            longPressAction = { actions.startDictation() },
+            releaseAction = { actions.finishDictation() }
+        ) { actions.pressTextSpace(true) }
 
             val bottomTop = top + keyHeight * 4 + gap * 4
             val touchBottom = bottomTop + bottomActionHeight
@@ -1424,11 +1446,11 @@ class WeikeKeyboardView(
             globe(canvas, switchKeyboard.centerX(), bottomIconY, muted, dp(24))
             target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
-            val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
-            lucide(canvas, R.drawable.ic_lucide_mic, voice.centerX(), bottomIconY, dp(24), muted)
-            target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleVoice() }
-            return
-        }
+        val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
+        drawDictationMic(canvas, voice.centerX(), bottomIconY)
+        target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
+        return
+    }
 
         val symbols = cell(0, 0)
         functionBox(symbols)
@@ -1517,7 +1539,12 @@ class WeikeKeyboardView(
         val space = cell(2, 3, columnSpan = 2)
         key(canvas, space)
         centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
-        target(space, keySound = true) { actions.pressTextSpace(true) }
+        target(
+            space,
+            keySound = true,
+            longPressAction = { actions.startDictation() },
+            releaseAction = { actions.finishDictation() }
+        ) { actions.pressTextSpace(true) }
 
         val bottomTop = top + keyHeight * 4 + gap * 4
         val touchBottom = bottomTop + bottomActionHeight
@@ -1527,31 +1554,24 @@ class WeikeKeyboardView(
         target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
         val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
-        lucide(canvas, R.drawable.ic_lucide_mic, voice.centerX(), bottomIconY, dp(24), muted)
-        target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleVoice() }
+        drawDictationMic(canvas, voice.centerX(), bottomIconY)
+        target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
     }
 
-    private fun drawNineKeySymbolSidebar(canvas: Canvas, viewport: RectF) {
-        nineKeySymbolViewport = RectF(viewport)
-        // Match the three visible shortcut cells to the adjacent 3x3 keypad rows.
-        // Additional shortcuts remain reachable by scrolling the sidebar.
-        val itemGap = dp(7)
-        val itemHeight = (viewport.height() - itemGap * 2) / 3f
-        val itemStride = itemHeight + itemGap
-        val contentHeight = (nineKeySymbols.size * itemStride - itemGap).coerceAtLeast(viewport.height())
-        nineKeySymbolMaxScroll = (contentHeight - viewport.height()).coerceAtLeast(0f)
-        nineKeySymbolScrollY = nineKeySymbolScrollY.coerceIn(0f, nineKeySymbolMaxScroll)
-        canvas.save()
-        canvas.clipRect(viewport)
-        nineKeySymbols.forEachIndexed { index, symbol ->
-            val y = viewport.top + index * itemStride - nineKeySymbolScrollY
-            val box = RectF(viewport.left, y, viewport.right, y + itemHeight)
-            key(canvas, box)
-            fittedLabel(canvas, symbol, RectF(box).apply { offset(dp(3), 0f) }, 21f, white, false)
-            val targetBox = RectF(box).apply { intersect(viewport) }
-            target(targetBox, keySound = true) { actions.typeEnglish(symbol) }
+    /** 键盘右下角的麦克风：平时灰色，听写中粉色高亮并随音量脉动。 */
+    private fun drawDictationMic(canvas: Canvas, cx: Float, cy: Float) {
+        if (!dictationActive) {
+            lucide(canvas, R.drawable.ic_lucide_mic, cx, cy, dp(24), muted)
+            return
         }
-        canvas.restore()
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(56, 255, 107, 157)
+        canvas.drawCircle(cx, cy, dp(21) + meter * dp(6), paint)
+        paint.color = Color.rgb(255, 107, 157)
+        canvas.drawCircle(cx, cy, dp(16) + meter * dp(4), paint)
+        paint.style = Paint.Style.FILL_AND_STROKE
+        lucide(canvas, R.drawable.ic_lucide_mic, cx, cy, dp(22), Color.WHITE)
+        postInvalidateOnAnimation()
     }
 
     private fun candidates(
@@ -1562,11 +1582,11 @@ class WeikeKeyboardView(
     ) {
         val y = dp(11)
         val textSize = (18 + candidateTextSizeLevel * 2).toFloat()
-        val rowHeight = maxOf(dp(37), dp(textSize.toInt() + 16))
+        val rowHeight = maxOf(dp(37), sp(textSize.toInt() + 16))
         val expandWidth = dp(43)
         val strip = RectF(dp(5), y, width - dp(5) - expandWidth, y + rowHeight)
         candidateStrip = RectF(0f, y - dp(4), width.toFloat(), y + rowHeight + dp(5))
-        paint.textSize = dp(textSize.toInt())
+        paint.textSize = sp(textSize.toInt())
         paint.typeface = Typeface.DEFAULT_BOLD
         if (candidateItems.isEmpty()) {
             label(canvas, emptyLabel, strip.left + dp(8), strip.centerY() + dp(7), 14f, muted, Paint.Align.LEFT)
@@ -1606,7 +1626,7 @@ class WeikeKeyboardView(
         val expandWidth = dp(43)
         val strip = RectF(dp(5), y, width - dp(5) - expandWidth, y + rowHeight)
         candidateStrip = RectF(0f, y - dp(4), width.toFloat(), y + rowHeight + dp(5))
-        val symbols = listOf("。", "？", "！", "……", "～", "#", "：", "、")
+        val symbols = nineKeySymbols.ifEmpty { listOf("，", "。", "？", "！", "…", "：", "、", "～") }
         val cellWidth = strip.width() / symbols.size
         canvas.save()
         canvas.clipRect(strip)
@@ -1883,7 +1903,7 @@ class WeikeKeyboardView(
             emojiPanel = true; candidateExpanded = false; invalidate()
         }
         target(language, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { toggleTextLanguage() }
-        target(space, keySound = true) { actions.pressTextSpace(pinyin) }
+        target(space, keySound = true, longPressAction = { actions.startDictation() }, releaseAction = { actions.finishDictation() }) { actions.pressTextSpace(pinyin) }
         target(enter, keySound = true, longPressAction = { actions.newline() }) { actions.enter() }
     }
 
@@ -1909,7 +1929,7 @@ class WeikeKeyboardView(
         target(emoji, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             emojiPanel = true; candidateExpanded = false; invalidate()
         }
-        target(space, keySound = true) { actions.pressTextSpace(false) }
+        target(space, keySound = true, longPressAction = { actions.startDictation() }, releaseAction = { actions.finishDictation() }) { actions.pressTextSpace(false) }
         target(enter, keySound = true, longPressAction = { actions.newline() }) { actions.enter() }
     }
 
@@ -1925,8 +1945,8 @@ class WeikeKeyboardView(
         }
 
         val voice = RectF(width - edge - actionWidth, actionTop, width - edge, touchBottom)
-        lucide(canvas, R.drawable.ic_lucide_mic, voice.centerX(), iconY, dp(24), muted)
-        target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleVoice() }
+        drawDictationMic(canvas, voice.centerX(), iconY)
+        target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
     }
 
     private fun toggleTextLanguage() {
@@ -2045,13 +2065,13 @@ class WeikeKeyboardView(
         var renderedSize = size
         paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         while (renderedSize > 11f) {
-            paint.textSize = dp(renderedSize.toInt())
+            paint.textSize = sp(renderedSize.toInt())
             if (paint.measureText(value) <= box.width() - dp(8)) break
             renderedSize -= 1f
         }
         canvas.save()
         canvas.clipRect(box)
-        label(canvas, value, box.centerX(), box.centerY() + dp(renderedSize.toInt()) * .35f, renderedSize, color, Paint.Align.CENTER, bold)
+        label(canvas, value, box.centerX(), box.centerY() + sp(renderedSize.toInt()) * .35f, renderedSize, color, Paint.Align.CENTER, bold)
         canvas.restore()
     }
 
@@ -2070,7 +2090,7 @@ class WeikeKeyboardView(
 
     private fun leftClippedLabel(canvas: Canvas, value: String, box: RectF, size: Float, color: Int) {
         paint.typeface = Typeface.DEFAULT
-        paint.textSize = dp(size.toInt())
+        paint.textSize = sp(size.toInt())
         val maxWidth = box.width() - dp(24)
         var rendered = value
         while (rendered.length > 1 && paint.measureText("$rendered...") > maxWidth) rendered = rendered.dropLast(1)
@@ -2366,10 +2386,6 @@ class WeikeKeyboardView(
                     candidateVelocityTracker?.recycle()
                     candidateVelocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
                 }
-                nineKeySymbolDragging = !candidateDragging && nineKeySymbolViewport?.contains(event.x, event.y) == true
-                if (nineKeySymbolDragging) {
-                    nineKeySymbolDragStart = nineKeySymbolScrollY
-                }
                 answerDragging = !candidateDragging && answerViewport?.contains(event.x, event.y) == true
                 candidateDragStartScroll = candidateScrollX
                 answerDragStartScroll = answerScrollY
@@ -2463,11 +2479,6 @@ class WeikeKeyboardView(
                         activeTargetCancelled = true
                         pressedBox = null
                     }
-                    invalidate()
-                } else if (nineKeySymbolDragging) {
-                    nineKeySymbolScrollY = (nineKeySymbolDragStart - (event.y - touchDownY))
-                        .coerceIn(0f, nineKeySymbolMaxScroll)
-                    pressedBox = null
                     invalidate()
                 } else if (candidateDragging) {
                     candidateVelocityTracker?.addMovement(event)
@@ -2626,14 +2637,12 @@ class WeikeKeyboardView(
                         return true
                     }
                 }
-                val wasNineKeySymbolDragging = nineKeySymbolDragging && kotlin.math.abs(event.y - touchDownY) > dp(4)
                 val wasDragging = candidateDragging && kotlin.math.abs(event.x - touchDownX) > dp(4)
                 val wasAnswerDragging = answerDragging && kotlin.math.abs(event.y - touchDownY) > dp(4)
-                nineKeySymbolDragging = false
                 candidateDragging = false
                 polishRelationDragging = false
                 answerDragging = false
-                if (wasNineKeySymbolDragging || wasDragging || wasAnswerDragging) {
+                if (wasDragging || wasAnswerDragging) {
                     candidateVelocityTracker?.addMovement(event)
                     candidateVelocityTracker?.computeCurrentVelocity(1_000)
                     val velocity = (-(candidateVelocityTracker?.xVelocity ?: 0f)).toInt()
@@ -2700,7 +2709,6 @@ class WeikeKeyboardView(
                 candidateVelocityTracker?.recycle()
                 candidateVelocityTracker = null
                 answerDragging = false
-                nineKeySymbolDragging = false
                 clipboardTracking = false
                 clipboardTouchedEntry = null
                 clipboardSwipeOffset = 0f
@@ -2822,7 +2830,7 @@ class WeikeKeyboardView(
     private fun hasPredictions(): Boolean = mode in listOf(KeyboardMode.PINYIN, KeyboardMode.ENGLISH, KeyboardMode.SYMBOLS) &&
         predictionCandidates.isNotEmpty()
     private fun polishIndexAt(x: Float, textLeft: Float): Int {
-        paint.textSize = dp(13).toFloat()
+        paint.textSize = sp(13)
         paint.typeface = Typeface.DEFAULT
         val relative = (x - textLeft).coerceAtLeast(0f)
         var index = 0

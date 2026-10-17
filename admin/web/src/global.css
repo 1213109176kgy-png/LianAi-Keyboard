@@ -1,0 +1,13 @@
+/* 全局重置：去掉浏览器默认的 body 8px 外边距，后台铺满视口。 */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  min-width: 960px;
+  background: #f7f4f5;
+}

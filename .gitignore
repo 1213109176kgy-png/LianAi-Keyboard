@@ -18,3 +18,17 @@ tmp_*.json
 build-*.log
 /dictionaries/dist/
 *.iml
+
+# Backend dependencies, runtime data and local credentials.
+node_modules/
+admin/server/data/
+admin/web/dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+._*
+
+# Local payment verification screenshots can contain order/checkout details.
+/docs/payment-test/

@@ -4,6 +4,8 @@ import android.content.Context
 
 class AppContainer(context: Context) {
     val settings = AppSettingsRepository(context.applicationContext)
+    val userSession = UserSessionStore(context.applicationContext)
+    val pendingPurchase = PendingPurchaseStore(context.applicationContext)
     val lexicon = LexiconDatabase.get(context.applicationContext).lexiconDao()
     val englishLearning = LexiconDatabase.get(context.applicationContext).englishLearningDao()
     val pinyinLearning = LexiconDatabase.get(context.applicationContext).pinyinLearningDao()

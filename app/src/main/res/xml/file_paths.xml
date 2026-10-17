@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- In-app update APKs land in getExternalFilesDir("updates"). -->
+    <external-files-path
+        name="updates"
+        path="updates/" />
+</paths>

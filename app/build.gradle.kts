@@ -12,19 +12,37 @@ val releaseProperties = Properties().apply {
     if (file.exists()) file.inputStream().use(::load)
 }
 
+val localBuildProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
+val mimoAsrApiKey = providers.gradleProperty("mimoAsrApiKey")
+    .orElse(providers.environmentVariable("MIMO_ASR_API_KEY"))
+    .getOrElse(localBuildProperties.getProperty("mimoAsrApiKey").orEmpty())
+val escapedMimoAsrApiKey = mimoAsrApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.weike.ime"
     compileSdk = 35
 
+    buildFeatures {
+        // UpdateClient gates plain-http loopback debug endpoints behind BuildConfig.DEBUG.
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.lianai.keyboard"
-        minSdk = 33
+        // API 29 (Android 10) baseline. Runtime branches guard the few API 30+/33+
+        // calls (caption-bar insets, overlay window context, receiver flags), so
+        // newer devices keep their original code paths unchanged.
+        minSdk = 29
         targetSdk = 35
         // This product is based on the current Vertick IME v1.4.3 release.
         // Keep the upstream-compatible version so the built-in release checker
         // does not report a false update against the exact same baseline.
         versionCode = 33
         versionName = "1.5.3"
+        buildConfigField("String", "MIMO_ASR_API_KEY", "\"$escapedMimoAsrApiKey\"")
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -141,6 +159,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     testImplementation(kotlin("test"))
+    // org.json is an Android stub on the JVM; provide the real implementation for unit tests.
+    testImplementation("org.json:json:20240303")
 }
 
 tasks.register("verifyOpenSourceRelease") {

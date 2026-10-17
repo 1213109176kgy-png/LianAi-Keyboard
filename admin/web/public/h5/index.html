@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="恋爱键盘——会聊天的 AI 输入法。帮你回、超会说、专业离线拼音，让每一次回复都恰到好处。" />
+  <title>恋爱键盘 · 会聊天的 AI 输入法</title>
+  <link rel="icon" type="image/png" href="/brand/icon.png" />
+  <link rel="apple-touch-icon" href="/brand/icon.png" />
+  <style>
+    :root {
+      --pink: #ff6b9d;
+      --peach: #ffa07a;
+      --ink: #3a2a30;
+      --muted: #a08a92;
+      --card: #ffffff;
+      --bg: #fff7f9;
+      --shadow: 0 12px 32px rgba(214, 126, 158, .14);
+      --radius: 22px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+    .page { max-width: 480px; margin: 0 auto; padding: 0 20px 40px; }
+
+    /* ---- hero ---- */
+    .hero {
+      position: relative;
+      margin: 0 -20px;
+      padding: 64px 28px 56px;
+      background: linear-gradient(160deg, #ff8fb2 0%, var(--pink) 46%, var(--peach) 100%);
+      color: #fff;
+      overflow: hidden;
+      text-align: center;
+    }
+    .hero::after {
+      content: "";
+      position: absolute; left: -40px; right: -40px; bottom: -70px; height: 130px;
+      background: var(--bg);
+      border-radius: 50% 50% 0 0;
+    }
+    .float-heart {
+      position: absolute;
+      font-size: 20px;
+      opacity: .32;
+      animation: floatUp 7s linear infinite;
+      user-select: none;
+    }
+    @keyframes floatUp {
+      0% { transform: translateY(30px) rotate(-8deg); opacity: 0; }
+      18% { opacity: .38; }
+      100% { transform: translateY(-190px) rotate(10deg); opacity: 0; }
+    }
+    .logo {
+      width: 84px; height: 84px;
+      margin: 0 auto 18px;
+      border-radius: 26px;
+      display: block;
+      object-fit: contain;
+      box-shadow: 0 14px 34px rgba(180, 40, 90, .28);
+    }
+    .hero h1 { font-size: 32px; letter-spacing: 2px; font-weight: 800; }
+    .hero .tagline { margin-top: 8px; font-size: 16px; opacity: .95; font-weight: 600; }
+    .hero .sub { margin-top: 6px; font-size: 13px; opacity: .92; }
+
+    /* ---- buttons ---- */
+    .cta {
+      display: block;
+      width: 100%;
+      margin-top: 26px;
+      padding: 16px 0;
+      border: none;
+      border-radius: 999px;
+      background: #fff;
+      color: var(--pink);
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-decoration: none;
+      box-shadow: 0 12px 26px rgba(150, 30, 80, .30);
+      transition: transform .15s ease;
+    }
+    .cta:active { transform: scale(.97); }
+    .cta[aria-disabled="true"] { opacity: .6; pointer-events: none; }
+    .cta-ghost {
+      display: inline-block;
+      margin-top: 14px;
+      padding: 8px 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, .65);
+      color: #fff;
+      font-size: 12.5px;
+      text-decoration: none;
+    }
+
+    /* ---- sections ---- */
+    section { margin-top: 34px; }
+    .sec-title { display: flex; align-items: center; gap: 8px; font-size: 19px; font-weight: 800; }
+    .sec-title::before { content: "♥"; color: var(--pink); font-size: 15px; }
+    .sec-sub { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+
+    .grid { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px 16px 16px;
+    }
+    .card .icon {
+      width: 44px; height: 44px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #ffe3ec, #ffd8c2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      margin-bottom: 10px;
+    }
+    .card h3 { font-size: 15px; font-weight: 800; }
+    .card p { margin-top: 5px; font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+    /* ---- plans ---- */
+    .plan {
+      margin-top: 16px;
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .plan .info h3 { font-size: 16px; font-weight: 800; }
+    .plan .info .desc { margin-top: 3px; font-size: 12px; color: var(--muted); }
+    .plan .meta { margin-top: 7px; font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
+    .plan .meta span { background: #fff2f6; border-radius: 999px; padding: 2px 9px; }
+    .plan .price { text-align: right; flex: none; }
+    .plan .price .amount { font-size: 22px; font-weight: 800; color: var(--pink); }
+    .plan .price .amount .unit { font-size: 12px; font-weight: 700; }
+    .plan .price .period { font-size: 11px; color: var(--muted); }
+    .plan.free .price .amount { color: #2fae74; }
+    .empty {
+      margin-top: 16px;
+      padding: 30px 20px;
+      text-align: center;
+      background: var(--card);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .empty .big { font-size: 30px; margin-bottom: 8px; }
+
+    /* ---- download ---- */
+    .download-card {
+      margin-top: 16px;
+      background: linear-gradient(150deg, #fff, #fff4f7);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 26px 22px;
+      text-align: center;
+    }
+    .download-card .cta { margin-top: 18px; background: linear-gradient(135deg, var(--pink), var(--peach)); color: #fff; }
+    .download-card .note { margin-top: 12px; font-size: 12px; color: #8d767f; }
+
+    footer {
+      margin-top: 40px;
+      text-align: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.9;
+    }
+    footer .hearts { letter-spacing: 8px; color: #ffc3d6; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <span class="float-heart" style="left:12%; top:60%;">❤</span>
+      <span class="float-heart" style="left:78%; top:52%; animation-delay:2.3s;">♥</span>
+      <span class="float-heart" style="left:60%; top:70%; animation-delay:4.1s; font-size:14px;">❥</span>
+      <span class="float-heart" style="left:26%; top:75%; animation-delay:1.2s; font-size:15px;">♥</span>
+      <img class="logo" src="/brand/logo.webp" alt="恋爱键盘 Logo" width="84" height="84" />
+      <h1>恋爱键盘</h1>
+      <p class="tagline">会聊天的 AI 输入法</p>
+      <p class="sub">让每一次回复，都恰到好处</p>
+      <a class="cta" id="heroDownload" href="#" aria-disabled="true">立即下载</a>
+      <a class="cta-ghost" id="versionChip" href="javascript:void(0)">正在获取最新版本…</a>
+    </header>
+
+    <section>
+      <div class="sec-title">为什么选择恋爱键盘</div>
+      <div class="sec-sub">打字之外，它还懂怎么把话说好</div>
+      <div class="grid">
+        <div class="card">
+          <div class="icon">💬</div>
+          <h3>帮你回</h3>
+          <p>不知道怎么回消息？粘贴 TA 的话，AI 一键生成三种语气的得体回复。</p>
+        </div>
+        <div class="card">
+          <div class="icon">🎙️</div>
+          <h3>超会说</h3>
+          <p>语音说出来，自动润色成流畅自然的文字，方言口语也能优雅表达。</p>
+        </div>
+        <div class="card">
+          <div class="icon">⌨️</div>
+          <h3>专业输入</h3>
+          <p>Rime 离线词库，九宫格 / 26 键随心换，打字不联网也飞快。</p>
+        </div>
+        <div class="card">
+          <div class="icon">🔒</div>
+          <h3>隐私优先</h3>
+          <p>密码等敏感输入框自动停用 AI 功能，你的私人内容绝不上云。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="plansSection">
+      <div class="sec-title">订阅套餐</div>
+      <div class="sec-sub">解锁官方 AI 通道，免配置开箱即用</div>
+      <div id="plans"></div>
+    </section>
+
+    <section>
+      <div class="sec-title">下载安装</div>
+      <div class="download-card">
+        <div style="font-size:26px;">📲</div>
+        <h3 style="margin-top:8px; font-size:16px; font-weight:800;">安卓版 · 直接下载安装</h3>
+        <p style="margin-top:6px; font-size:12.5px; color:var(--muted);" id="apkMeta">支持 Android 10 及以上机型</p>
+        <a class="cta" id="mainDownload" href="#" aria-disabled="true">下载安装包</a>
+        <p class="note">安装时如提示「未知来源应用」，允许一次即可 · 安装包已通过 SHA-256 校验</p>
+      </div>
+    </section>
+
+    <footer>
+      <div class="hearts">♥ ♥ ♥</div>
+      <div>恋爱键盘 LianAi Keyboard · 官方网站</div>
+      <div>© 2026 恋爱键盘 · 让表达更有温度</div>
+    </footer>
+  </div>
+
+  <script>
+    function setDownload(url, label) {
+      ['heroDownload', 'mainDownload'].forEach(id => {
+        const el = document.getElementById(id)
+        el.href = url
+        el.textContent = label
+        el.removeAttribute('aria-disabled')
+      })
+    }
+    fetch('/api/app/latest')
+      .then(r => (r.ok ? r.json() : null))
+      .then(latest => {
+        const chip = document.getElementById('versionChip')
+        if (!latest) {
+          chip.textContent = '安装包即将上线，敬请期待'
+          return
+        }
+        const mb = latest.sizeBytes ? ' · ' + (latest.sizeBytes / 1048576).toFixed(1) + ' MB' : ''
+        chip.textContent = '最新版本 ' + latest.versionName + mb
+        document.getElementById('apkMeta').textContent = '当前版本 v' + latest.versionName + ' · 支持 Android 10 及以上机型'
+        setDownload(latest.apkUrl, '下载 v' + latest.versionName)
+      })
+      .catch(() => {
+        document.getElementById('versionChip').textContent = '版本信息获取失败，请稍后重试'
+      })
+
+    fetch('/api/app/plans')
+      .then(r => r.json())
+      .then(data => {
+        const plans = (data && data.plans) || []
+        const box = document.getElementById('plans')
+        if (!plans.length) {
+          box.innerHTML = '<div class="empty"><div class="big">💝</div>订阅套餐即将上线，敬请期待</div>'
+          return
+        }
+        box.innerHTML = plans.map(p => {
+          const free = !p.priceFen
+          const amount = free ? '免费' : '<span class="unit">¥</span>' + (p.priceFen / 100).toFixed(free ? 0 : (p.priceFen % 100 ? 2 : 0))
+          const quota = p.dailyQuota ? '每日 ' + p.dailyQuota + ' 次' : '不限量'
+          return '<div class="plan' + (free ? ' free' : '') + '">' +
+            '<div class="info"><h3>' + escapeHtml(p.name) + '</h3>' +
+            (p.description ? '<div class="desc">' + escapeHtml(p.description) + '</div>' : '') +
+            '<div class="meta"><span>' + p.periodDays + ' 天有效期</span><span>官方 AI 通道 ' + quota + '</span></div></div>' +
+            '<div class="price"><div class="amount">' + amount + '</div><div class="period">/' + p.periodDays + ' 天</div></div></div>'
+        }).join('')
+      })
+      .catch(() => {
+        document.getElementById('plans').innerHTML = '<div class="empty"><div class="big">💝</div>订阅套餐即将上线，敬请期待</div>'
+      })
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+    }
+  </script>
+</body>
+</html>
