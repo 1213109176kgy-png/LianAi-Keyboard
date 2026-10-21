@@ -20,6 +20,8 @@ build-*.log
 *.iml
 
 # Backend dependencies, runtime data and local credentials.
+# The admin project is maintained locally and is not committed.
+/admin/
 node_modules/
 admin/server/data/
 admin/web/dist/

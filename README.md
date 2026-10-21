@@ -69,17 +69,9 @@ ASR 语音接口当前不是必填项，默认折叠；只使用文字键盘、�
 
 请勿在 Issue、截图或聊天记录中公开 API Key。调用费用和内容政策由你所选择的模型服务商决定。
 
-## 管理后台与支付服务源码
+## 源码范围
 
-Android App 位于 `app/`；React 管理后台、Express API、支付宝支付与订单管理位于 [`admin/`](admin/README.md)。
-
-```bash
-cd admin
-npm ci
-npm run dev
-```
-
-后台支持套餐配置、支付宝下单与回调、订单查询、人工补单和权益入账。安装及部署说明见 [`admin/README.md`](admin/README.md)。数据库、支付密钥、OSS 密钥和本地配置不随源码提交，需在各自环境中配置。
+本仓库提交 Android App（`app/`）及配套资源。管理后台与支付服务作为本地工程维护，`admin/` 不纳入版本控制。
 
 品牌原图位于 `branding/logo-source.png`，运行 `python3 scripts/generate_brand_assets.py` 可重新导出 App、后台和文档使用的图标资源。
 
