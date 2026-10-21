@@ -14,6 +14,7 @@ interface ModelRecord {
   capabilities: string[]
   inputPriceFen: number
   outputPriceFen: number
+  audioPriceFenPerHour?: number
   apiKeySaved: boolean
   enabled: boolean
   createdAt: number
@@ -29,6 +30,7 @@ interface ModelForm {
   capabilities: string[]
   inputPriceYuan: number
   outputPriceYuan: number
+  audioPriceYuanPerHour: number
   enabled: boolean
 }
 
@@ -62,6 +64,15 @@ const PROVIDERS: Record<string, { name: string; baseUrl: string; models: ModelPr
       { model: 'kimi-k2.6', displayName: 'Kimi K2.6（视觉）', capabilities: ['text', 'vision'], input: 6.5, output: 27 }
     ]
   },
+  xiaomi_mimo: {
+    name: '小米 MiMo',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    models: [
+      { model: 'mimo-v2.5-asr', displayName: 'MiMo V2.5 ASR（语音识别）', capabilities: ['asr'], input: 0, output: 0, hourly: 0.5 },
+      { model: 'mimo-v2.5', displayName: 'MiMo V2.5（多模态）', capabilities: ['text', 'vision'], input: 0, output: 0 },
+      { model: 'mimo-v2.5-pro', displayName: 'MiMo V2.5 Pro', capabilities: ['text'], input: 0, output: 0 }
+    ]
+  },
   custom: { name: '自定义（OpenAI 兼容）', baseUrl: '', models: [] }
 }
 
@@ -71,6 +82,7 @@ interface ModelPreset {
   capabilities: string[]
   input: number
   output: number
+  hourly?: number
 }
 
 export default function Models() {
@@ -101,12 +113,13 @@ export default function Models() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ provider: 'deepseek', baseUrl: PROVIDERS.deepseek.baseUrl, capabilities: ['text'], inputPriceYuan: 0, outputPriceYuan: 0, enabled: false })
+    form.setFieldsValue({ provider: 'deepseek', baseUrl: PROVIDERS.deepseek.baseUrl, capabilities: ['text'], inputPriceYuan: 0, outputPriceYuan: 0, audioPriceYuanPerHour: 0, enabled: false })
     setModalOpen(true)
   }
 
   const openEdit = (record: ModelRecord) => {
     setEditing(record)
+    form.resetFields()
     form.setFieldsValue({
       provider: record.provider,
       model: record.model,
@@ -115,6 +128,7 @@ export default function Models() {
       capabilities: record.capabilities,
       inputPriceYuan: record.inputPriceFen / 100,
       outputPriceYuan: record.outputPriceFen / 100,
+      audioPriceYuanPerHour: (record.audioPriceFenPerHour ?? 0) / 100,
       enabled: record.enabled
     })
     setModalOpen(true)
@@ -130,8 +144,9 @@ export default function Models() {
         baseUrl: values.baseUrl,
         apiKey: values.apiKey || '',
         capabilities: values.capabilities,
-        inputPriceFen: Math.round(values.inputPriceYuan * 100),
-        outputPriceFen: Math.round(values.outputPriceYuan * 100),
+        inputPriceFen: Math.round((values.inputPriceYuan ?? (editing?.inputPriceFen ?? 0) / 100) * 100),
+        outputPriceFen: Math.round((values.outputPriceYuan ?? (editing?.outputPriceFen ?? 0) / 100) * 100),
+        audioPriceFenPerHour: Math.round((values.audioPriceYuanPerHour ?? 0) * 100),
         enabled: values.enabled
       }
       if (editing) {
@@ -171,6 +186,7 @@ export default function Models() {
         capabilities: record.capabilities,
         inputPriceFen: record.inputPriceFen,
         outputPriceFen: record.outputPriceFen,
+        audioPriceFenPerHour: record.audioPriceFenPerHour ?? 0,
         enabled
       })
       setModels(prev => prev.map(item => (item.id === record.id ? { ...item, enabled } : item)))
@@ -222,22 +238,25 @@ export default function Models() {
       render: (caps: string[]) => (
         <>
           {caps.map(cap => (
-            <Tag key={cap} color={cap === 'vision' ? 'purple' : 'blue'}>
-              {cap === 'vision' ? '视觉' : '文本'}
+            <Tag key={cap} color={cap === 'asr' ? 'cyan' : cap === 'vision' ? 'purple' : 'blue'}>
+              {cap === 'asr' ? '语音识别' : cap === 'vision' ? '视觉' : '文本'}
             </Tag>
           ))}
         </>
       )
     },
     {
-      title: '价格（元 / 百万tokens）',
+      title: '参考价格',
       width: 170,
       render: (_, record) =>
-        record.inputPriceFen === 0 && record.outputPriceFen === 0 ? (
-          <Tag color="green">免费</Tag>
+        record.capabilities.includes('asr') ? (
+          <span>¥{((record.audioPriceFenPerHour ?? 0) / 100).toFixed(2)} / 小时</span>
+        ) : record.inputPriceFen === 0 && record.outputPriceFen === 0 ? (
+          record.provider === 'xiaomi_mimo' ? <Tag>待录入参考价</Tag> : <Tag color="green">免费</Tag>
         ) : (
           <span>
             入 ¥{(record.inputPriceFen / 100).toFixed(2)} · 出 ¥{(record.outputPriceFen / 100).toFixed(2)}
+            <div style={{ fontSize: 12, color: '#b09aa3' }}>元 / 百万 tokens</div>
           </span>
         )
     },
@@ -287,6 +306,7 @@ export default function Models() {
   ]
 
   const selectedProvider = Form.useWatch('provider', form) || ''
+  const speechPricing = (Form.useWatch('capabilities', form) || []).includes('asr')
   const presetList = PROVIDERS[selectedProvider]?.models || []
   const presetOptions = presetList.map(item => ({
     value: item.model,
@@ -311,7 +331,8 @@ export default function Models() {
         displayName: preset.displayName,
         capabilities: preset.capabilities,
         inputPriceYuan: preset.input,
-        outputPriceYuan: preset.output
+        outputPriceYuan: preset.output,
+        audioPriceYuanPerHour: preset.hourly ?? 0
       })
     }
   }
@@ -323,7 +344,7 @@ export default function Models() {
         showIcon
         style={{ marginBottom: 16, borderRadius: 12 }}
         message="官方 AI 通道的模型池"
-        description="在此配置各服务商模型与密钥（密钥只保存在服务端），带「视觉」能力的模型将用于 App 端图片识别等功能；价格为参考展示，计费策略后续在此基础上下发。"
+        description="配置 DeepSeek、GLM、Kimi、小米 MiMo 等服务商模型与密钥。视觉和语音识别模型可在「业务配置」中分配给 App 功能；密钥仅保存在后台，调用用量记入模型成本。"
       />
       <Card
         variant="borderless"
@@ -341,7 +362,7 @@ export default function Models() {
           dataSource={models}
           loading={loading}
           pagination={false}
-          locale={{ emptyText: '还没有模型，点击「添加模型」从 DeepSeek / GLM / Kimi 预设快速添加' }}
+          locale={{ emptyText: '还没有模型，点击「添加模型」从 DeepSeek / GLM / Kimi / 小米 MiMo 预设快速添加' }}
         />
       </Card>
 
@@ -388,11 +409,17 @@ export default function Models() {
             <Checkbox.Group
               options={[
                 { label: '文本', value: 'text' },
-                { label: '视觉（图片识别）', value: 'vision' }
+                { label: '视觉（图片识别）', value: 'vision' },
+                { label: '语音识别（ASR）', value: 'asr' }
               ]}
             />
           </Form.Item>
-          <Form.Item label="参考价格（元 / 百万 tokens）" required>
+          {speechPricing ? (
+            <Form.Item name="audioPriceYuanPerHour" label="参考价格（元 / 小时）" rules={[{ required: true, message: '请填写每小时音频价格' }]} extra="按输入音频时长折算成本：每小时单价 × 音频秒数 ÷ 3600。">
+              <InputNumber min={0} precision={2} step={0.1} prefix="¥" addonAfter="元 / 小时" style={{ width: '100%' }} />
+            </Form.Item>
+          ) : (
+          <Form.Item label="参考价格（元 / 百万 tokens）" required extra={selectedProvider === 'xiaomi_mimo' ? '请按小米控制台实际价格填写；预填的 0 表示暂未录入成本价格。' : undefined}>
             <Space size={16} style={{ display: 'flex' }}>
               <Form.Item name="inputPriceYuan" noStyle rules={[{ required: true }]}>
                 <InputNumber min={0} precision={2} style={{ width: '100%' }} prefix="输入 ¥" placeholder="输入价" />
@@ -402,6 +429,7 @@ export default function Models() {
               </Form.Item>
             </Space>
           </Form.Item>
+          )}
           <Form.Item name="enabled" label="上架状态" valuePropName="checked" extra="上架且已配置密钥的模型才会出现在 App 可用列表">
             <Switch checkedChildren="上架" unCheckedChildren="下架" />
           </Form.Item>

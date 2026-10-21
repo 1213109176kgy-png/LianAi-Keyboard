@@ -12,14 +12,6 @@ val releaseProperties = Properties().apply {
     if (file.exists()) file.inputStream().use(::load)
 }
 
-val localBuildProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use(::load)
-}
-val mimoAsrApiKey = providers.gradleProperty("mimoAsrApiKey")
-    .orElse(providers.environmentVariable("MIMO_ASR_API_KEY"))
-    .getOrElse(localBuildProperties.getProperty("mimoAsrApiKey").orEmpty())
-val escapedMimoAsrApiKey = mimoAsrApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.weike.ime"
@@ -42,7 +34,6 @@ android {
         // does not report a false update against the exact same baseline.
         versionCode = 33
         versionName = "1.5.3"
-        buildConfigField("String", "MIMO_ASR_API_KEY", "\"$escapedMimoAsrApiKey\"")
         ndk { abiFilters += "arm64-v8a" }
     }
 

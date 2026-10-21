@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url'
 import { load, save, hash, hashWithSalt, randomToken, createSession, resolveSession, destroySession } from './store.mjs'
 import { installSubscriptionPayments } from './subscription-payments.mjs'
 import { installOrderManagement } from './order-management.mjs'
+import { parseModelInput } from './model-config.mjs'
+import { modelBillingUnit, modelUsageCost } from './model-pricing.mjs'
+import { requireVip } from './model-access.mjs'
+import { installTextGeneration, providerHeaders } from './text-generation.mjs'
+import { installAppConfiguration } from './app-config.mjs'
 
 import {
   ossConfigured,
@@ -649,39 +654,6 @@ const paymentLedger = installSubscriptionPayments(app, { db, save, requireAppUse
 installOrderManagement(app, { db, requireAuth, wrap, ledger: paymentLedger })
 
 // ---- ai models（官方 AI 通道的模型配置：密钥留在服务端，价格供计费展示） ----
-const MODEL_CAPABILITIES = ['text', 'vision']
-
-function parseModelInput(body, existing) {
-  const provider = String(body?.provider || '').trim()
-  const model = String(body?.model || '').trim()
-  const displayName = String(body?.displayName || '').trim() || model
-  const baseUrl = String(body?.baseUrl || '').trim().replace(/\/+$/, '')
-  const apiKey = String(body?.apiKey || '').trim()
-  const capabilities = Array.isArray(body?.capabilities)
-    ? [...new Set(body.capabilities.map(String).filter(item => MODEL_CAPABILITIES.includes(item)))]
-    : []
-  const inputPriceFen = Number(body?.inputPriceFen ?? 0)
-  const outputPriceFen = Number(body?.outputPriceFen ?? 0)
-  if (!provider) throw badRequest('请选择服务商')
-  if (!model || model.length > 100) throw badRequest('请填写模型 ID（100 字以内）')
-  if (!displayName || displayName.length > 60) throw badRequest('展示名不能超过 60 字')
-  if (!/^https:\/\//.test(baseUrl)) throw badRequest('接口地址必须以 https:// 开头')
-  if (!capabilities.length) throw badRequest('至少选择一种能力（文本 / 视觉）')
-  if (!Number.isInteger(inputPriceFen) || inputPriceFen < 0 || !Number.isInteger(outputPriceFen) || outputPriceFen < 0) {
-    throw badRequest('价格必须是不小于 0 的数字（元，每百万 tokens）')
-  }
-  return {
-    provider,
-    model,
-    displayName,
-    baseUrl,
-    apiKey: apiKey || existing?.apiKey || '',
-    capabilities,
-    inputPriceFen,
-    outputPriceFen,
-    enabled: body?.enabled !== false
-  }
-}
 
 const publicModelView = item => ({
   id: item.id,
@@ -689,6 +661,8 @@ const publicModelView = item => ({
   displayName: item.displayName,
   capabilities: item.capabilities,
   inputPriceFen: item.inputPriceFen,
+  billingUnit: modelBillingUnit(item),
+  audioPriceFenPerHour: item.audioPriceFenPerHour ?? 0,
   outputPriceFen: item.outputPriceFen
 })
 
@@ -763,14 +737,14 @@ app.get('/api/app/models', (req, res) => {
 // ---- ai usage & cost stats（模型调用记账与经营统计） ----
 /**
  * AI 代理转发成功后调用记账。costFen 未提供时按模型配置价计算：
- * 输入 tokens × 输入价 + 输出 tokens × 输出价（每百万 tokens，单位分）。
+ * 文本/视觉按百万 tokens，语音按实际音频秒数 / 3600 × 每小时单价（单位分）。
  */
-function recordModelUsage({ modelId, userId, feature, inputTokens = 0, outputTokens = 0, costFen }) {
+function recordModelUsage({ modelId, userId, feature, inputTokens = 0, outputTokens = 0, audioSeconds, costFen }) {
   const model = db.aiModels.find(item => item.id === modelId)
+  const pricing = modelUsageCost(model, { inputTokens, outputTokens, audioSeconds })
   const resolved = Number.isFinite(costFen) && costFen >= 0
     ? Math.round(costFen)
-    : Math.round((inputTokens / 1_000_000) * (model?.inputPriceFen || 0)) +
-      Math.round((outputTokens / 1_000_000) * (model?.outputPriceFen || 0))
+    : pricing.costFen
   const user = db.appUsers.find(item => item.id === userId)
   db.aiUsage.push({
     id: `u_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
@@ -782,6 +756,7 @@ function recordModelUsage({ modelId, userId, feature, inputTokens = 0, outputTok
     feature: String(feature || ''),
     inputTokens,
     outputTokens,
+    ...pricing,
     costFen: resolved,
     createdAt: Date.now()
   })
@@ -798,12 +773,13 @@ app.get('/api/stats/costs', requireAuth, (req, res) => {
   const byModelMap = new Map()
   usage.forEach(item => {
     const entry = byModelMap.get(item.modelId) || {
-      modelId: item.modelId, displayName: item.displayName, calls: 0, costFen: 0, inputTokens: 0, outputTokens: 0
+      modelId: item.modelId, displayName: item.displayName, calls: 0, costFen: 0, inputTokens: 0, outputTokens: 0, audioSeconds: 0
     }
     entry.calls += 1
     entry.costFen += item.costFen
     entry.inputTokens += item.inputTokens
     entry.outputTokens += item.outputTokens
+    entry.audioSeconds += item.audioSeconds || 0
     byModelMap.set(item.modelId, entry)
   })
   const byFeatureMap = new Map()
@@ -847,43 +823,9 @@ const VISION_SYSTEM_PROMPT = [
   '{"scenario":"恋爱|朋友|商务|家人|其他","analysis":"不超过20字的场景判断","replies":["第1条","第2条","第3条"]}'
 ].join('\n')
 
-app.get('/api/business', requireAuth, (req, res) => {
-  const visionReply = db.business.visionReply
-  const model = db.aiModels.find(item => item.id === visionReply.modelId)
-  res.json({
-    visionReply: {
-      enabled: visionReply.enabled,
-      modelId: visionReply.modelId,
-      modelDisplayName: model?.displayName || '',
-      modelReady: Boolean(model && model.enabled && model.apiKey && model.capabilities.includes('vision'))
-    }
-  })
-})
-
-app.put('/api/business', requireAuth, wrap(async (req, res) => {
-  const enabled = Boolean(req.body?.visionReplyEnabled)
-  const modelId = String(req.body?.modelId || '')
-  if (enabled) {
-    const model = db.aiModels.find(item => item.id === modelId)
-    if (!model) throw badRequest('请选择截图识别回复使用的模型')
-    if (!model.enabled || !model.apiKey) throw badRequest('所选模型未上架或未配置密钥，请先在「模型配置」完成')
-    if (!model.capabilities.includes('vision')) throw badRequest('所选模型不支持视觉能力，请选择带「视觉」标签的模型')
-  }
-  db.business.visionReply = { enabled, modelId: enabled ? modelId : modelId }
-  save()
-  res.json({ ok: true, business: db.business })
-}))
-
-// App 查询功能开关（公开）
-app.get('/api/app/business', (req, res) => {
-  const visionReply = db.business.visionReply
-  const model = db.aiModels.find(item => item.id === visionReply.modelId)
-  res.json({
-    visionReplyEnabled: Boolean(
-      visionReply.enabled && model && model.enabled && model.apiKey && model.capabilities.includes('vision')
-    )
-  })
-})
+const optionalAppUser = (req, res, next) => req.headers.authorization ? requireAppUser(req, res, next) : next()
+installAppConfiguration(app, { db, save, requireAuth, requireAppUser, optionalAppUser, wrap, recordModelUsage })
+installTextGeneration(app, { db, requireAppUser, wrap, recordModelUsage })
 
 function extractJson(text) {
   const trimmed = text.replace(/```json|```/g, '').trim()
@@ -899,7 +841,7 @@ function extractJson(text) {
   return null
 }
 
-app.post('/api/app/vision/reply', requireAppUser, wrap(async (req, res) => {
+app.post('/api/app/vision/reply', requireAppUser, requireVip(db), wrap(async (req, res) => {
   const config = db.business.visionReply
   const model = db.aiModels.find(item => item.id === config.modelId)
   if (!config.enabled || !model || !model.enabled || !model.apiKey || !model.capabilities.includes('vision')) {
@@ -929,10 +871,7 @@ app.post('/api/app/vision/reply', requireAppUser, wrap(async (req, res) => {
   }
   const response = await fetch(`${model.baseUrl}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${model.apiKey}`
-    },
+    headers: providerHeaders(model),
     body: JSON.stringify(providerBody),
     signal: AbortSignal.timeout(80_000)
   })

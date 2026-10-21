@@ -51,7 +51,10 @@ export function defaultPayment() {
 // 业务功能配置模板（App 功能开关与所用模型）
 export function defaultBusiness() {
   return {
-    visionReply: { enabled: false, modelId: '' }
+    visionReply: { enabled: false, modelId: '' },
+    speechRecognition: { enabled: false, modelId: '' },
+    replySuggestions: { enabled: false, modelId: '' },
+    superSpeak: { enabled: false, modelId: '' }
   }
 }
 
@@ -59,7 +62,10 @@ function mergeBusiness(stored) {
   const base = defaultBusiness()
   if (!stored || typeof stored !== 'object') return base
   return {
-    visionReply: { ...base.visionReply, ...(stored.visionReply || {}) }
+    visionReply: { ...base.visionReply, ...(stored.visionReply || {}) },
+    speechRecognition: { ...base.speechRecognition, ...(stored.speechRecognition || {}) },
+    replySuggestions: { ...base.replySuggestions, ...(stored.replySuggestions || {}) },
+    superSpeak: { ...base.superSpeak, ...(stored.superSpeak || {}) }
   }
 }
 

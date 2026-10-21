@@ -154,7 +154,10 @@ data class ModelEndpointConfig(
 
 data class CloudApiSettings(
     val asr: ModelEndpointConfig = ModelEndpointConfig(),
-    val text: ModelEndpointConfig = ModelEndpointConfig()
+    val text: ModelEndpointConfig = ModelEndpointConfig(),
+    val vision: ModelEndpointConfig = ModelEndpointConfig(),
+    val reply: ModelEndpointConfig = ModelEndpointConfig(),
+    val superSpeak: ModelEndpointConfig = ModelEndpointConfig()
 )
 
 data class RecognitionResult(

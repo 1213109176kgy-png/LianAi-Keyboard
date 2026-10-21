@@ -1,8 +1,19 @@
 import { useState } from 'react'
-import { Button, Card, Form, Input, App } from 'antd'
-import { LockOutlined, UserOutlined } from '@ant-design/icons'
+import { Button, Form, Input, App } from 'antd'
+import {
+  ArrowRightOutlined,
+  AudioOutlined,
+  CheckOutlined,
+  HeartFilled,
+  LockOutlined,
+  MessageOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined,
+  UserOutlined
+} from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api, TOKEN_KEY } from '../api'
+import './Login.css'
 
 interface LoginForm {
   username: string
@@ -29,64 +40,63 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background:
-          'radial-gradient(1100px 520px at 12% 8%, #ffd9e8 0%, transparent 55%),' +
-          'radial-gradient(900px 520px at 88% 92%, #ffe6d5 0%, transparent 55%),' +
-          'linear-gradient(135deg, #fff5f8 0%, #ffeef4 45%, #ffe3ec 100%)',
-        padding: 24
-      }}
-    >
-      <div style={{ width: 396, maxWidth: '100%' }}>
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <img
-            src="/brand/logo.webp"
-            alt="恋爱键盘 Logo"
-            style={{
-              width: 72,
-              height: 72,
-              margin: '0 auto 18px',
-              borderRadius: 24,
-              boxShadow: '0 14px 34px rgba(53, 170, 232, .18)',
-              display: 'block',
-              objectFit: 'contain'
-            }}
-          />
-          <div style={{ fontSize: 24, fontWeight: 700, color: '#333', letterSpacing: 1 }}>恋爱键盘 · 管理后台</div>
-          <div style={{ marginTop: 8, fontSize: 13, color: '#a38a95' }}>升级包管理与阿里云 OSS 配置</div>
-        </div>
-        <Card
-          variant="borderless"
-          style={{ borderRadius: 20, boxShadow: '0 18px 50px rgba(214, 126, 158, .18)' }}
-          styles={{ body: { padding: '30px 30px 22px' } }}
-        >
-          <Form<LoginForm> size="large" onFinish={onFinish} autoComplete="off">
-            <Form.Item name="username" rules={[{ required: true, message: '请输入账号' }]}>
-              <Input prefix={<UserOutlined style={{ color: '#e08aa4' }} />} placeholder="账号" />
+    <main className="login-page">
+      <div className="login-shell">
+        <section className="login-story" aria-label="恋爱键盘">
+          <div className="login-brand">
+            <img src="/brand/logo.webp" alt="" width={54} height={54} />
+            <div><strong>恋爱键盘</strong><span>让表达更有温度</span></div>
+          </div>
+          <div className="login-story-content">
+            <h1>让心意，<br />有更好的表达。</h1>
+            <p className="login-story-description">从一句回复开始，连接每一次真诚的交流。</p>
+            <div className="login-illustration" aria-hidden="true">
+              <div className="login-art-orbit" />
+              <div className="login-art-heart"><HeartFilled /></div>
+              <div className="login-chat login-chat-incoming">
+                <span className="login-chat-avatar"><MessageOutlined /></span>
+                <div><span className="login-chat-label">TA 的消息</span><p>今天有件开心的事，<br />想第一个告诉你。</p></div>
+              </div>
+              <div className="login-chat login-chat-reply">
+                <span className="login-reply-label"><ThunderboltOutlined /> 帮你回</span>
+                <p>那我得认真听听，<br />你的开心值得被分享。</p>
+                <span className="login-reply-status"><CheckOutlined /> 把心意，好好说出来</span>
+              </div>
+              <div className="login-keyboard">
+                <span className="login-key-symbol"><AudioOutlined /></span>
+                <span className="login-key-space">每一句，都更懂你</span>
+                <span className="login-key-send"><ArrowRightOutlined /></span>
+              </div>
+            </div>
+          </div>
+          <div className="login-capabilities">
+            <span><MessageOutlined /> 智能回复</span>
+            <span><HeartFilled /> 超会说</span>
+            <span><AudioOutlined /> 语音输入</span>
+          </div>
+        </section>
+
+        <section className="login-form-panel" aria-labelledby="login-title">
+          <div className="login-form-heading">
+            <span className="login-access-icon"><LockOutlined /></span>
+            <h2 id="login-title">欢迎回来</h2>
+            <p>登录恋爱键盘管理后台</p>
+          </div>
+          <Form<LoginForm> className="login-form" layout="vertical" size="large" onFinish={onFinish} requiredMark={false}>
+            <Form.Item label="管理员账号" name="username" rules={[{ required: true, message: '请输入账号' }]}>
+              <Input prefix={<UserOutlined />} placeholder="请输入管理员账号" autoComplete="username" spellCheck={false} />
             </Form.Item>
-            <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password prefix={<LockOutlined style={{ color: '#e08aa4' }} />} placeholder="密码" />
+            <Form.Item label="登录密码" name="password" rules={[{ required: true, message: '请输入密码' }]}>
+              <Input.Password prefix={<LockOutlined />} placeholder="请输入登录密码" autoComplete="current-password" />
             </Form.Item>
-            <Button
-              type="primary"
-              htmlType="submit"
-              block
-              loading={loading}
-              style={{ height: 44, fontWeight: 600, boxShadow: '0 8px 20px rgba(255, 107, 157, .35)' }}
-            >
-              登 录
+            <Button className="login-submit" type="primary" htmlType="submit" block loading={loading}>
+              {loading ? '正在登录' : '登录后台'}{!loading && <ArrowRightOutlined />}
             </Button>
           </Form>
-          <div style={{ marginTop: 16, textAlign: 'center', fontSize: 12, color: '#c1a7b1' }}>
-            默认账号 admin / admin123，登录后请及时修改密码
-          </div>
-        </Card>
+          <div className="login-access-note"><SafetyCertificateOutlined /> 仅限授权管理员访问</div>
+        </section>
       </div>
-    </div>
+      <footer className="login-footer">恋爱键盘 · 管理后台</footer>
+    </main>
   )
 }

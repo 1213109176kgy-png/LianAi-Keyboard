@@ -30,7 +30,6 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.weike.ime.R
-import com.weike.ime.BuildConfig
 import com.weike.ime.ImagePickerActivity
 import com.weike.ime.data.AppContainer
 import com.weike.ime.data.AppSettingsRepository
@@ -38,7 +37,6 @@ import com.weike.ime.data.ChineseKeyboardLayout
 import com.weike.ime.data.ClipboardEntry
 import com.weike.ime.data.CloudApiSettings
 import com.weike.ime.data.CloudProvider
-import com.weike.ime.data.ModelEndpointConfig
 import com.weike.ime.data.DictionaryPackManager
 import com.weike.ime.data.HapticStrength
 import com.weike.ime.data.HistoryRetention
@@ -56,9 +54,16 @@ import com.weike.ime.data.VoiceUiState
 import com.weike.ime.data.WritingStyle
 import com.weike.ime.network.MimoTextPolisher
 import com.weike.ime.network.TextPolisher
+import com.weike.ime.network.AppConfigurationClient
+import com.weike.ime.network.ModelAccessRouter
+import com.weike.ime.network.ModelFeature
+import com.weike.ime.network.ModelSetupRequiredException
+import com.weike.ime.network.RoutedTextPolisher
 import com.weike.ime.network.VisionReplyClient
 import com.weike.ime.speech.AudioRecorder
 import com.weike.ime.speech.BoundedPcmBuffer
+import com.weike.ime.speech.AsrClient
+import com.weike.ime.speech.BackendAsrClient
 import com.weike.ime.speech.RoutedAsrClient
 import com.weike.ime.text.JiebaSegmenter
 import com.weike.ime.text.StructuredExpressionFormatter
@@ -116,16 +121,35 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private var replyOptions: List<String> = emptyList()
     private var replyLoading = false
     private var replyEmotion = ""
-    private val polisher: TextPolisher = MimoTextPolisher(
-        endpointProvider = { cloudApiSettings.text },
-        replyPromptProvider = { replyPrompt },
-        polishRelationProvider = { polishRelation },
-        relationPromptsProvider = { relationPrompts }
-    )
-    // 语音识别免配置：用户没有自定义 ASR 接口时，直接使用内置小米 MiMo。
-    private val asrClient = RoutedAsrClient(endpointProvider = {
-        cloudApiSettings.asr.takeIf { it.isComplete() } ?: BUILTIN_ASR_CONFIG
-    })
+    private val polisher: TextPolisher by lazy { RoutedTextPolisher(modelAccess) { endpoint ->
+        MimoTextPolisher(endpointProvider = { endpoint }, replyPromptProvider = { replyPrompt },
+            polishRelationProvider = { polishRelation }, relationPromptsProvider = { relationPrompts })
+    } }
+    private val appConfiguration by lazy { AppConfigurationClient(this) }
+    private val modelAccess by lazy { ModelAccessRouter(appConfiguration, { container.userSession.token() }, { cloudApiSettings }) }
+    private var configurationJob: Job? = null
+    private val customAsrClient = RoutedAsrClient(endpointProvider = { cloudApiSettings.asr })
+    private val officialAsrClient by lazy { BackendAsrClient(appConfiguration) { container.userSession.token() } }
+    private val asrClient = object : AsrClient {
+        override suspend fun transcribe(pcm: ByteArray): Result<String> =
+            if (cloudApiSettings.asr.isComplete()) customAsrClient.transcribe(pcm) else officialAsrClient.transcribe(pcm)
+        override suspend fun testConnection(): Result<Unit> =
+            if (cloudApiSettings.asr.isComplete()) customAsrClient.testConnection() else officialAsrClient.testConnection()
+    }
+
+    private fun refreshAppConfiguration() {
+        if (configurationJob?.isActive == true) return
+        configurationJob = serviceScope.launch {
+            appConfiguration.refresh(force = true).onSuccess { config ->
+                val changed = !screenshotReplyEnabled
+                screenshotReplyEnabled = true
+                Log.i(TAG, "App config refreshed; speechEnabled=${config.speechRecognition.enabled}; speechModel=${config.speechRecognition.model}; modelId=${config.speechRecognition.modelId}")
+                if (changed) render()
+            }
+        }
+        // 所有用户都可进入截图功能，未配置时给出 VIP / 自配模型提示。
+        screenshotReplyEnabled = true
+    }
 
     private var mode = KeyboardMode.PINYIN
     private var modeBeforeSymbols = KeyboardMode.PINYIN
@@ -461,14 +485,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 cloudApiSettings = settings
             }
         }
-        serviceScope.launch {
-            visionReplyClient.enabled().onSuccess { enabled ->
-                if (screenshotReplyEnabled != enabled) {
-                    screenshotReplyEnabled = enabled
-                    render()
-                }
-            }
-        }
+        refreshAppConfiguration()
         serviceScope.launch { container.settings.replyPrompt.collect { replyPrompt = it } }
         serviceScope.launch { container.settings.relationPrompts.collect { relationPrompts = it } }
         serviceScope.launch {
@@ -822,6 +839,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         Log.d(TAG, "onStartInputView; restarting=$restarting; mode=$mode; pinyin=${pinyinRawBuffer.length}; english=${englishBuffer.length}")
         super.onStartInputView(info, restarting)
         inputViewActive = true
+        refreshAppConfiguration()
         if (pendingAskRestore) {
             pendingAskRestore = false
             if (!sensitiveField && mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
@@ -933,6 +951,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun onDestroy() {
+        modelSetupDialog?.dismiss()
         visionJob?.cancel()
         stopDictation(commit = false)
         stopVoice(cancelled = true)
@@ -1015,17 +1034,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (previous != nextMode) clearPredictions()
         rememberKeyboardMode(mode)
         if (mode == KeyboardMode.PINYIN) requestPinyinEngine()
-        if (mode == KeyboardMode.ASK) {
-            // 业务开关可能变化，进入帮你回时刷新一次
-            serviceScope.launch {
-                visionReplyClient.enabled().onSuccess { enabled ->
-                    if (screenshotReplyEnabled != enabled) {
-                        screenshotReplyEnabled = enabled
-                        render()
-                    }
-                }
-            }
-        }
+        if (mode == KeyboardMode.ASK || mode == KeyboardMode.VOICE) refreshAppConfiguration()
         if (previous == KeyboardMode.PINYIN && mode != KeyboardMode.PINYIN) scheduleLanguageEngineRelease()
         render()
     }
@@ -1284,22 +1293,55 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     /** 截图识别回复：相册选聊天截图 → 后台视觉模型 → 多条场景化回复。 */
+    private var modelSetupDialog: android.app.AlertDialog? = null
+    private fun showModelSetupDialog(message: String) {
+        if (modelSetupDialog?.isShowing == true) return
+        fun open(destination: String) {
+            startActivity(android.content.Intent(this, com.weike.ime.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra("model_setup_destination", destination))
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("选择 AI 使用方式").setMessage(message)
+            .setPositiveButton("开通 VIP") { _, _ -> open("vip") }
+            .setNegativeButton("去配置模型") { _, _ -> open("models") }
+            .setNeutralButton("取消", null).create()
+        dialog.window?.apply {
+            setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+            attributes = attributes.apply { token = this@WeikeInputMethodService.window?.window?.decorView?.windowToken ?: keyboard.windowToken }
+            addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        }
+        modelSetupDialog = dialog
+        runCatching { dialog.show() }.onFailure { toast(message) }
+    }
+
+    private fun withModelAccess(feature: ModelFeature, action: () -> Unit) {
+        serviceScope.launch {
+            try {
+                modelAccess.route(feature)
+                if (!sensitiveField) action()
+            } catch (error: CancellationException) { throw error }
+              catch (error: Exception) {
+                voiceState = VoiceUiState.Error(error.message.orEmpty())
+                if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
+                render()
+            }
+        }
+    }
+
     override fun screenshotReply() {
         if (sensitiveField || mode != KeyboardMode.ASK) return
-        val token = container.userSession.token()
-        if (token == null) {
-            voiceState = VoiceUiState.Error("请先打开恋爱键盘 App，在个人中心登录后使用")
-            render()
-            return
-        }
-        runCatching {
-            startActivity(
-                android.content.Intent(this, ImagePickerActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.onFailure {
-            voiceState = VoiceUiState.Error("无法打开相册：${it.message}")
-            render()
+        serviceScope.launch {
+            try {
+                modelAccess.route(ModelFeature.VISION)
+                startActivity(android.content.Intent(this@WeikeInputMethodService, ImagePickerActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (error: CancellationException) { throw error }
+              catch (error: Exception) {
+                voiceState = VoiceUiState.Error(error.message ?: "无法打开相册")
+                if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
+                render()
+            }
         }
     }
 
@@ -1323,7 +1365,6 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         pendingAskRestore = true
         // 全屏选图会经历键盘隐藏/重建，回来时可能已被重置回拼音模式：主动切回帮你回
         if (mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
-        val token = container.userSession.token() ?: return
         lastVisionUri = uri
         visionJob?.cancel()
         replySource = ""
@@ -1335,6 +1376,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         // 全屏选图页关闭后输入法窗口处于收起状态，主动拉起键盘展示识别进度
         runCatching { requestShowSelf(0) }
         visionJob = serviceScope.launch {
+            val route = try { modelAccess.route(ModelFeature.VISION) }
+                catch (error: CancellationException) { throw error }
+                catch (error: Exception) {
+                    replyLoading = false
+                    voiceState = VoiceUiState.Error(error.message.orEmpty())
+                    if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
+                    render()
+                    return@launch
+                }
             // 个别 ROM 的媒体提供器会偶发阻塞 openInputStream（协程取消不了阻塞 IO），
             // 用带超时的 Future 兜底：卡住也能在限时后恢复 UI 并提示，而不是永远转圈。
             val image = runCatching {
@@ -1348,7 +1398,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 return@launch
             }
             val (base64, mime) = image
-            visionReplyClient.reply(token, base64, mime)
+            (if (route.official) visionReplyClient.reply(route.endpoint.apiKey, base64, mime)
+             else visionReplyClient.replyWithModel(route.endpoint, base64, mime))
                 .onSuccess { result ->
                     replyLoading = false
                     replyOptions = result.replies
@@ -1384,22 +1435,26 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP) to "image/jpeg"
     }.getOrNull()
 
-    override fun analyzeClipboardReply() {        if (sensitiveField || mode != KeyboardMode.ASK) return
-        val content = runCatching {
-            clipboardManager.primaryClip
-                ?.getItemAt(0)
-                ?.coerceToText(this)
-                ?.toString()
-                ?.trim()
-                .orEmpty()
-        }.getOrDefault("")
-        if (content.isBlank()) {
-            voiceState = VoiceUiState.Error("剪贴板没有文字，请先复制TA的话")
-            render()
-            return
+    override fun analyzeClipboardReply() {
+        if (sensitiveField || mode != KeyboardMode.ASK) return
+        withModelAccess(ModelFeature.REPLY) {
+            if (mode != KeyboardMode.ASK) return@withModelAccess
+            val content = runCatching {
+                clipboardManager.primaryClip
+                    ?.getItemAt(0)
+                    ?.coerceToText(this)
+                    ?.toString()
+                    ?.trim()
+                    .orEmpty()
+            }.getOrDefault("")
+            if (content.isBlank()) {
+                voiceState = VoiceUiState.Error("剪贴板没有文字，请先复制TA的话")
+                render()
+                return@withModelAccess
+            }
+            replySource = content
+            generateReplyOptions()
         }
-        replySource = content
-        generateReplyOptions()
     }
 
     override fun regenerateReplyOptions() {
@@ -1442,6 +1497,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 render()
             }.onFailure {
                 replyLoading = false
+                if (it is ModelSetupRequiredException) {
+                    voiceState = VoiceUiState.Error(it.message.orEmpty())
+                    showModelSetupDialog(it.message.orEmpty())
+                    replyEmotion = ""
+                    render()
+                    return@onFailure
+                }
                 Log.w(TAG, "Reply suggestions unavailable; using local fallback", it)
                 replyOptions = SuggestionFallback.replies(source)
                 replyEmotion = AiFallbackReason.replyLabel(it)
@@ -1477,27 +1539,36 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun polishCurrentText() {
         if (sensitiveField || mode != KeyboardMode.VOICE) return
-        flushPendingPinyinBatch()
-        val source = polishDraft.trim()
-        if (source.isBlank()) {
-            voiceState = VoiceUiState.Error("请先输入想要优化的话")
+        withModelAccess(ModelFeature.SUPER_SPEAK) {
+            if (mode != KeyboardMode.VOICE) return@withModelAccess
+            flushPendingPinyinBatch()
+            val source = polishDraft.trim()
+            if (source.isBlank()) {
+                voiceState = VoiceUiState.Error("请先输入想要优化的话")
+                render()
+                return@withModelAccess
+            }
+            polishLoading = true
+            polishOptions = emptyList()
             render()
-            return
-        }
-        polishLoading = true
-        polishOptions = emptyList()
-        render()
-        serviceScope.launch {
-            polisher.suggestPolishes(source, polishRelation).onSuccess { options ->
-                polishLoading = false
-                polishOptions = options
-                render()
-            }.onFailure {
-                polishLoading = false
-                Log.w(TAG, "Polish suggestions unavailable; using local fallback", it)
-                polishOptions = SuggestionFallback.polishes(source, polishRelation)
-                voiceState = VoiceUiState.Idle
-                render()
+            serviceScope.launch {
+                polisher.suggestPolishes(source, polishRelation).onSuccess { options ->
+                    polishLoading = false
+                    polishOptions = options
+                    render()
+                }.onFailure {
+                    polishLoading = false
+                    if (it is ModelSetupRequiredException) {
+                        voiceState = VoiceUiState.Error(it.message.orEmpty())
+                        showModelSetupDialog(it.message.orEmpty())
+                        render()
+                        return@onFailure
+                    }
+                    Log.w(TAG, "Polish suggestions unavailable; using local fallback", it)
+                    polishOptions = SuggestionFallback.polishes(source, polishRelation)
+                    voiceState = VoiceUiState.Idle
+                    render()
+                }
             }
         }
     }
@@ -1663,6 +1734,16 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                     historyType = InputHistoryType.DICTATION,
                     recordingDurationMs = recordingDurationMs
                 )
+                return@launch
+            }
+            try {
+                modelAccess.route(if (askMode) ModelFeature.REPLY else ModelFeature.SUPER_SPEAK)
+            } catch (error: CancellationException) { throw error }
+              catch (error: Exception) {
+                activeVoiceMode = null
+                voiceState = VoiceUiState.Error(error.message.orEmpty())
+                if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
+                render()
                 return@launch
             }
             if (translationMode) {
@@ -3148,17 +3229,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     companion object {
         private const val TAG = "WeikeIme"
-        /** 内置语音识别通道（小米 MiMo）。构建时从未跟踪的本地配置或环境变量注入密钥。 */
-        private val BUILTIN_ASR_CONFIG = ModelEndpointConfig(
-            url = "https://api.xiaomimimo.com/v1",
-            apiKey = BuildConfig.MIMO_ASR_API_KEY,
-            model = "mimo-v2.5-asr",
-            provider = CloudProvider.XIAOMI_MIMO
-        )
         @Volatile private var retainedKeyboardMode: KeyboardMode? = null
         private const val MINIMUM_RECORDING_MS = 700L
         private const val MINIMUM_POLISHED_RECORDING_MS = 350L
-        private const val ASR_TIMEOUT_MS = 8_000L
+        private const val ASR_TIMEOUT_MS = 20_000L
         private const val FAST_POLISHING_TIMEOUT_MS = 3_500L
         private const val TRANSLATION_TIMEOUT_MS = 8_000L
         private const val DEEP_POLISHING_TIMEOUT_MS = 8_000L

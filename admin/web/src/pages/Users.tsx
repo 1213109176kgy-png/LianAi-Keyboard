@@ -44,6 +44,8 @@ interface UsageRow {
   feature: string
   inputTokens: number
   outputTokens: number
+  billingUnit?: 'tokens' | 'audio_hour'
+  audioSeconds?: number
   costFen: number
   createdAt: number
 }
@@ -236,11 +238,13 @@ export default function Users() {
       render: (feature: string) => FEATURE_LABELS[feature] || feature
     },
     {
-      title: 'tokens（入/出）',
+      title: '用量',
       width: 150,
-      render: (_, record) => `${record.inputTokens} / ${record.outputTokens}`
+      render: (_, record) => record.billingUnit === 'audio_hour'
+        ? `${Number((record.audioSeconds ?? 0).toFixed(3))} 秒音频`
+        : `${record.inputTokens} / ${record.outputTokens} tokens`
     },
-    { title: '成本', dataIndex: 'costFen', width: 80, render: (fen: number) => yuan(fen) }
+    { title: '成本', dataIndex: 'costFen', width: 110, render: (fen: number) => `¥${(fen / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}` }
   ]
 
   return (

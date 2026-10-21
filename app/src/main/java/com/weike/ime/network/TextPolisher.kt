@@ -104,7 +104,7 @@ class MimoTextPolisher(
                 stream = false
             )
             Result.success(client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "文本模型快速润色失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "文本模型快速润色失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint).ifBlank { text }
             })
         } catch (cancelled: CancellationException) {
@@ -141,7 +141,7 @@ class MimoTextPolisher(
                 stream = false
             )
             Result.success(client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "文本模型请求失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "文本模型请求失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint).ifBlank { text }
             })
         } catch (cancelled: CancellationException) {
@@ -184,9 +184,9 @@ class MimoTextPolisher(
                 }
 
                 override fun onResponse(call: Call, response: okhttp3.Response) {
-                    response.use { streamedResponse ->
+                    try { response.use { streamedResponse ->
                         if (!streamedResponse.isSuccessful) {
-                            close(IOException(MimoApiConfig.responseError(streamedResponse, "文本模型请求失败")))
+                            close(MimoApiConfig.responseException(streamedResponse, "文本模型请求失败"))
                             return
                         }
                         val source = streamedResponse.body?.source()
@@ -206,7 +206,7 @@ class MimoTextPolisher(
                             if (delta.isNotEmpty()) trySend(delta)
                         }
                         close()
-                    }
+                    } } catch (error: Exception) { close(error) }
                 }
             })
             awaitClose { call.cancel() }
@@ -242,9 +242,9 @@ class MimoTextPolisher(
                 }
 
                 override fun onResponse(call: Call, response: okhttp3.Response) {
-                    response.use { streamedResponse ->
+                    try { response.use { streamedResponse ->
                         if (!streamedResponse.isSuccessful) {
-                            close(IOException(MimoApiConfig.responseError(streamedResponse, "Text model request failed")))
+                            close(MimoApiConfig.responseException(streamedResponse, "文本模型请求失败"))
                             return
                         }
                         val source = streamedResponse.body?.source()
@@ -264,7 +264,7 @@ class MimoTextPolisher(
                             if (delta.isNotEmpty()) trySend(delta)
                         }
                         close()
-                    }
+                    } } catch (error: Exception) { close(error) }
                 }
             })
             awaitClose { call.cancel() }
@@ -291,7 +291,7 @@ class MimoTextPolisher(
                 stream = false
             )
             val response = client.newCall(request).awaitBody { httpResponse ->
-                check(httpResponse.isSuccessful) { MimoApiConfig.responseError(httpResponse, "工作流识别失败") }
+                if (!httpResponse.isSuccessful) throw MimoApiConfig.responseException(httpResponse, "工作流识别失败")
                 extractResponseContent(JSONObject(httpResponse.body?.string().orEmpty()), endpoint)
             }
             WorkflowTaskType.fromModel(response)
@@ -326,7 +326,7 @@ class MimoTextPolisher(
                 stream = false
             )
             Result.success(client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "文本工作流失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "文本工作流失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint).trim()
             }.takeIf { it.isNotBlank() } ?: return Result.failure(IllegalStateException("模型未返回修改后的文本")))
         } catch (cancelled: CancellationException) {
@@ -348,7 +348,7 @@ class MimoTextPolisher(
                 stream = false
             )
             Result.success(client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "文本模型翻译失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "文本模型翻译失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint).ifBlank { text }
             })
         } catch (cancelled: CancellationException) {
@@ -413,7 +413,7 @@ class MimoTextPolisher(
                 stream = false
             )
             client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "文本模型连接失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "文本模型连接失败")
                 Unit
             }
             Result.success(Unit)
@@ -676,7 +676,7 @@ class MimoTextPolisher(
                 stream = false
             )
             val content = client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "生成备选话术失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "生成备选话术失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint)
             }.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
             val array = JSONArray(content)
@@ -702,7 +702,7 @@ class MimoTextPolisher(
                 stream = false
             )
             val content = client.newCall(request).awaitBody { response ->
-                check(response.isSuccessful) { MimoApiConfig.responseError(response, "生成推荐回复失败") }
+                if (!response.isSuccessful) throw MimoApiConfig.responseException(response, "生成推荐回复失败")
                 extractResponseContent(JSONObject(response.body?.string().orEmpty()), endpoint)
             }.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
             val array = JSONArray(content)

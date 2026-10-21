@@ -20,6 +20,7 @@ import org.json.JSONObject
 private val Context.settingsDataStore by preferencesDataStore("weike_settings")
 
 class AppSettingsRepository(private val context: Context) {
+    val userModels = UserModelRepository.get(context)
     private val startupPreferences = context.applicationContext.getSharedPreferences(
         KEYBOARD_STARTUP_PREFERENCES,
         Context.MODE_PRIVATE
@@ -55,6 +56,9 @@ class AppSettingsRepository(private val context: Context) {
     private val textModelKey = stringPreferencesKey("text_api_model")
     private val asrProviderKey = stringPreferencesKey("asr_provider")
     private val textProviderKey = stringPreferencesKey("text_provider")
+    private val visionUrlKey = stringPreferencesKey("vision_api_url")
+    private val visionModelKey = stringPreferencesKey("vision_api_model")
+    private val visionProviderKey = stringPreferencesKey("vision_provider")
     private val replyPromptKey = stringPreferencesKey("reply_prompt")
     private val relationPromptsKey = stringPreferencesKey("relation_prompts")
     private val clipboardHistoryEnabledKey = booleanPreferencesKey("clipboard_history_enabled")
@@ -141,8 +145,8 @@ class AppSettingsRepository(private val context: Context) {
     }
     val cloudApiSettings = flow {
         migrateCloudSecrets()
-        emitAll(context.settingsDataStore.data.map { prefs ->
-            CloudApiSettings(
+        emitAll(kotlinx.coroutines.flow.combine(context.settingsDataStore.data, userModels.changes) { prefs, _ ->
+            val legacy = CloudApiSettings(
                 asr = ModelEndpointConfig(
                     prefs[asrUrlKey].orEmpty(),
                     secrets.read(SECURE_ASR_KEY).orEmpty(),
@@ -156,8 +160,15 @@ class AppSettingsRepository(private val context: Context) {
                     prefs[textModelKey].orEmpty(),
                     runCatching { CloudProvider.valueOf(prefs[textProviderKey].orEmpty()) }
                         .getOrDefault(CloudProvider.CUSTOM)
+                ),
+                vision = ModelEndpointConfig(
+                    prefs[visionUrlKey].orEmpty(), secrets.read(SECURE_VISION_KEY).orEmpty(), prefs[visionModelKey].orEmpty(),
+                    runCatching { CloudProvider.valueOf(prefs[visionProviderKey].orEmpty()) }.getOrDefault(CloudProvider.CUSTOM)
                 )
             )
+            userModels.migrateLegacy(legacy.text, legacy.vision)
+            legacy.copy(reply = userModels.endpoint(UserModelSlot.REPLY),
+                superSpeak = userModels.endpoint(UserModelSlot.SUPER_SPEAK), vision = userModels.endpoint(UserModelSlot.VISION))
         })
     }
     val clipboardHistoryEnabled = context.settingsDataStore.data.map { prefs ->
@@ -474,6 +485,19 @@ class AppSettingsRepository(private val context: Context) {
 
     suspend fun replyPrompt(): String = replyPrompt.first()
 
+    suspend fun visionProvider(): CloudProvider = context.settingsDataStore.data.first().let { prefs ->
+        runCatching { CloudProvider.valueOf(prefs[visionProviderKey].orEmpty()) }.getOrDefault(CloudProvider.CUSTOM)
+    }
+
+    suspend fun saveVisionApi(config: ModelEndpointConfig, provider: CloudProvider) {
+        secrets.write(SECURE_VISION_KEY, config.apiKey.trim())
+        context.settingsDataStore.edit { prefs ->
+            prefs[visionUrlKey] = config.url.trim()
+            prefs[visionModelKey] = config.model.trim()
+            prefs[visionProviderKey] = provider.name
+        }
+    }
+
     suspend fun saveReplyPrompt(value: String) {
         val normalized = value.trim()
         require(normalized.length <= MAX_REPLY_PROMPT_LENGTH) { "提示词不能超过 $MAX_REPLY_PROMPT_LENGTH 个字符" }
@@ -615,6 +639,7 @@ class AppSettingsRepository(private val context: Context) {
         private const val STARTUP_BOTTOM_OFFSET_LEVEL = "bottom_offset_level"
         private const val SECURE_ASR_KEY = "asr_api_key"
         private const val SECURE_TEXT_KEY = "text_api_key"
+        private const val SECURE_VISION_KEY = "vision_api_key"
         const val DEFAULT_KEYBOARD_SOUND_VOLUME = .45f
         const val MIN_CANDIDATE_TEXT_SIZE_LEVEL = -3
         const val DEFAULT_CANDIDATE_TEXT_SIZE_LEVEL = 0

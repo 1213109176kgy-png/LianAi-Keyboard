@@ -133,6 +133,16 @@ object MimoApiConfig {
         else "$fallback: ${response.code} ($endpoint) - $message"
     }
 
+    fun responseException(response: Response, fallback: String): Exception {
+        if (response.request.url.host == "lianai.bahuang.tech" && response.code == 403) {
+            val json = runCatching { JSONObject(response.peekBody(MAX_ERROR_BODY_BYTES).string()) }.getOrNull()
+            if (json?.optString("code") in setOf("VIP_REQUIRED", "MODEL_NOT_CONFIGURED")) {
+                return ModelSetupRequiredException(json?.optString("message").orEmpty())
+            }
+        }
+        return java.io.IOException(responseError(response, fallback))
+    }
+
     private fun endpointFor(raw: String, suffix: String): String {
         val value = raw.trim().trimEnd('/')
         require(value.isNotBlank()) { "API URL is required" }

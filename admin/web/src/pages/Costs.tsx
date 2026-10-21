@@ -29,6 +29,7 @@ interface ModelSummary {
   costFen: number
   inputTokens: number
   outputTokens: number
+  audioSeconds?: number
 }
 
 interface FeatureSummary {
@@ -45,11 +46,15 @@ interface UsageRecord {
   feature: string
   inputTokens: number
   outputTokens: number
+  billingUnit?: 'tokens' | 'audio_hour'
+  audioSeconds?: number
+  audioPriceFenPerHour?: number
   costFen: number
   createdAt: number
 }
 
-const yuan = (fen: number) => `¥${(fen / 100).toFixed(2)}`
+const yuan = (fen: number) => `¥${(fen / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`
+const duration = (seconds?: number) => seconds == null ? '—' : `${Number(seconds.toFixed(3))} 秒`
 
 const maskedPhone = (phone: string) =>
   phone.length === 11 ? `${phone.slice(0, 3)}****${phone.slice(7)}` : phone || '—'
@@ -118,13 +123,20 @@ export default function Costs() {
       title: '输入 tokens',
       dataIndex: 'inputTokens',
       width: 110,
-      render: (tokens: number) => tokens.toLocaleString()
+      render: (tokens: number, record) => record.billingUnit === 'audio_hour' ? '—' : tokens.toLocaleString()
     },
     {
       title: '输出 tokens',
       dataIndex: 'outputTokens',
       width: 110,
-      render: (tokens: number) => tokens.toLocaleString()
+      render: (tokens: number, record) => record.billingUnit === 'audio_hour' ? '—' : tokens.toLocaleString()
+    },
+    {
+      title: '音频时长 / 单价',
+      width: 150,
+      render: (_, record) => record.billingUnit === 'audio_hour' ? (
+        <div>{duration(record.audioSeconds)}<div style={{ fontSize: 12, color: '#b09aa3' }}>{yuan(record.audioPriceFenPerHour ?? 0)} / 小时</div></div>
+      ) : '—'
     },
     {
       title: '成本',
@@ -137,6 +149,7 @@ export default function Costs() {
   const modelColumns: ColumnsType<ModelSummary> = [
     { title: '模型', dataIndex: 'displayName' },
     { title: '调用次数', dataIndex: 'calls', width: 100 },
+    { title: '音频总时长', dataIndex: 'audioSeconds', width: 130, render: (seconds?: number) => seconds ? duration(seconds) : '—' },
     {
       title: 'tokens（入/出）',
       width: 170,
@@ -157,7 +170,7 @@ export default function Costs() {
         showIcon
         style={{ marginBottom: 16, borderRadius: 12 }}
         message="经营统计：VIP 收入 vs 模型成本"
-        description="模型调用成本来自官方 AI 通道的每一次转发记账（AI 代理上线后自动记录）；VIP 收入取全部已支付订单。利润 = VIP 收入 − 模型成本。"
+        description="文本、视觉按 Token 计价；语音识别按输入音频时长和每小时参考价折算，成本保留小数。历史记录保留原值。VIP 收入取全部已支付订单，利润 = VIP 收入 − 模型成本。"
       />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
         <Card variant="borderless" style={{ borderRadius: 16, boxShadow: '0 10px 32px rgba(214,126,158,.10)' }}>
@@ -175,7 +188,7 @@ export default function Costs() {
           <Statistic
             title="模型调用成本"
             value={(stats?.totalCostFen ?? 0) / 100}
-            precision={2}
+            precision={6}
             prefix={<FundOutlined style={{ color: '#1677ff' }} />}
             suffix="元"
             loading={loading}

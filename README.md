@@ -87,7 +87,7 @@ npm run dev
 
 环境要求：JDK 17、Android SDK 35、NDK 26.1、Gradle 8.7。
 
-内置 MiMo ASR 的凭据通过未跟踪的 `local.properties` 中的 `mimoAsrApiKey`、Gradle 同名属性或 `MIMO_ASR_API_KEY` 环境变量提供，源码默认留空。未提供时可在 App 内配置自己的 ASR 接口。注入构建的凭据会进入 APK，公开发行时应使用受控的服务端接口。
+默认语音识别通过 `GET /api/app/config` 获取后台选定的语音模型，并通过登录后的 `POST /api/app/speech/transcribe` 识别。MiMo 密钥仅保存在后台，不再注入 APK。用户仍可在 App 内配置自己的 ASR 接口。
 
 ```powershell
 $env:JAVA_HOME='C:\path\to\jdk17'

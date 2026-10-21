@@ -47,6 +47,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.weike.ime.ui.SubscriptionViews
+import com.weike.ime.ui.ModelConfigurationViews
 import com.weike.ime.data.PendingPurchase
 import com.weike.ime.data.AppContainer
 import com.weike.ime.data.AppSettingsRepository
@@ -623,7 +624,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { applyKeyboardTheme(container.settings.keyboardTheme()) }
         // Silent daily check; never blocks or prompts on its own.
         lifecycleScope.launch { fetchLatestUpdate(silent = true) }
-        showPage(if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else Page.ACCOUNT)
+        showPage(when (intent.getStringExtra("model_setup_destination")) {
+            "models" -> Page.CLOUD
+            "vip" -> Page.SUBSCRIPTION
+            else -> if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else Page.ACCOUNT
+        })
     }
 
     override fun onResume() {
@@ -641,6 +646,10 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        when (intent.getStringExtra("model_setup_destination")) {
+            "models" -> { showPage(Page.CLOUD); return }
+            "vip" -> { showPage(Page.SUBSCRIPTION); return }
+        }
         if (isPaymentReturn(intent)) {
             // The browser/deep link carries no proof of payment. Query only
             // the persisted order belonging to the currently signed-in user.
@@ -1474,16 +1483,91 @@ class MainActivity : AppCompatActivity() {
         addView(microphoneStatus)
     }
 
+    private val modelViews by lazy { ModelConfigurationViews(this) }
+
+    private fun modelConfigurationButton(label: String, filled: Boolean, action: () -> Unit) =
+        modelViews.button(label, filled, action = action)
+
+    private fun buildUserModelControls(host: LinearLayout) {
+        val repository = container.settings.userModels
+        val profiles = repository.all()
+        host.addView(cloudSection("我的大模型"))
+        host.addView(card().apply {
+            if (profiles.isEmpty()) addView(cloudHelpText("还没有添加模型，可填写服务商、接口地址、API Key 和模型名。"))
+            profiles.forEach { profile ->
+                addView(actionRow(profile.name, "${profile.endpoint.provider.displayName} · ${profile.endpoint.model}") { showUserModelEditor(profile) })
+            }
+            addView(modelConfigurationButton("添加大模型", true) { showUserModelEditor(null) }.apply {
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
+            })
+        })
+        com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
+            val selected = profiles.find { it.id == repository.selectedId(slot) }
+            host.addView(cloudSection(slot.title))
+            host.addView(card().apply {
+                addView(actionRow("自配模型", selected?.name ?: "未配置，点击选择模型") {
+                    if (profiles.isEmpty()) { showUserModelEditor(null); return@actionRow }
+                    val labels = arrayOf("不配置") + profiles.map { "${it.name}\n${it.endpoint.model}" }
+                    val selectedIndex = profiles.indexOfFirst { it.id == selected?.id } + 1
+                    modelViews.choose("${slot.title}使用的模型", "选择后立即生效，可随时切换或取消配置。", labels.toList(), selectedIndex) { index ->
+                        repository.select(slot, if (index == 0) "" else profiles[index - 1].id)
+                        showPage(Page.CLOUD)
+                    }
+                })
+                addView(cloudHelpText(if (slot == com.weike.ime.data.UserModelSlot.VISION)
+                    "截图识别需要所选模型支持图片输入。非 VIP 或官方模型未配置时使用此模型。"
+                    else "可选择上方添加的任意文本模型。VIP 使用对应后台模型，其他情况使用此模型。"))
+            })
+        }
+    }
+
+    private fun showUserModelEditor(profile: com.weike.ime.data.UserModelProfile?) {
+        val name = modelViews.field("如：我的 DeepSeek").apply { setText(profile?.name.orEmpty()) }
+        lateinit var dialog: android.app.Dialog
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val contents = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(modelViews.label("配置名称"))
+            addView(name)
+            addView(providerConfigurationCard(isAsr = false,
+                load = { profile?.endpoint ?: ModelEndpointConfig() },
+                loadProvider = { profile?.endpoint?.provider ?: CloudProvider.CUSTOM },
+                save = { config, provider ->
+                    container.settings.userModels.save(profile?.id, name.text.toString(), config.copy(provider = provider))
+                    dialog.dismiss(); showPage(Page.CLOUD)
+                },
+                test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() },
+                actionsHost = footer).apply {
+                    background = null
+                    setPadding(0, 0, 0, 0)
+                })
+            if (profile != null) footer.addView(modelViews.button("删除模型", destructive = true) {
+                lateinit var confirmation: android.app.Dialog
+                val actions = LinearLayout(this@MainActivity).apply {
+                    addView(modelViews.button("取消") { confirmation.dismiss() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(10) })
+                    addView(modelViews.button("确认删除", filled = true, destructive = true) {
+                        container.settings.userModels.remove(profile.id)
+                        confirmation.dismiss()
+                        dialog.dismiss()
+                        showPage(Page.CLOUD)
+                        Toast.makeText(this@MainActivity, "模型已删除", Toast.LENGTH_SHORT).show()
+                    }, LinearLayout.LayoutParams(0, dp(48), 1f))
+                }
+                confirmation = modelViews.sheet("删除模型？", "确定删除「${profile.name}」吗？删除后，关联业务将恢复为未配置，可重新添加并选择。", View(this@MainActivity), actions)
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12))
+        }
+        dialog = modelViews.sheet(if (profile == null) "添加大模型" else "编辑大模型", "填写模型参数，保存后可为各项 AI 功能单独选择。", contents, footer)
+    }
+
     private fun buildCloudConfiguration(): View = screen {
         addView(cloudSubpageHeader("大模型配置") { showPage(cloudReturnPage) })
-        addView(cloudSection("文本模型"))
-        addView(providerConfigurationCard(
-            isAsr = false,
-            load = { container.settings.cloudApiSettings.first().text },
-            loadProvider = { container.settings.textProvider() },
-            save = { config, provider -> container.settings.saveTextApi(config, provider) },
-            test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() }
-        ))
+        addView(cloudHelpText("VIP 优先使用后台为各业务配置的官方模型。非 VIP 或该业务未配置时，使用下方所选模型。基础语音输入不受 VIP 限制。"))
+        val modelsHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        addView(modelsHost)
+        lifecycleScope.launch {
+            container.settings.cloudApiSettings.first() // 迁移旧版自配模型，保留原参数和密钥。
+            buildUserModelControls(modelsHost)
+        }
         addView(cloudSection("帮你回提示词"))
         addView(card().apply {
             addView(cloudHelpText("定义 AI 以谁的角度回复、回复什么内容。该提示词会作为系统提示词发送给文本模型。"))
@@ -1492,10 +1576,10 @@ class MainActivity : AppCompatActivity() {
             val actions = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
-                addView(compactFormActionButton("恢复默认", false) {
+                addView(modelConfigurationButton("恢复默认", false) {
                     promptInput.setText(AppSettingsRepository.DEFAULT_REPLY_PROMPT)
                 })
-                addView(compactFormActionButton("保存提示词", true) {
+                addView(modelConfigurationButton("保存提示词", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveReplyPrompt(promptInput.text.toString()) }
                             .onSuccess {
@@ -1505,7 +1589,12 @@ class MainActivity : AppCompatActivity() {
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
                 })
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12)
+                for (index in 0 until childCount) {
+                    getChildAt(index).layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                        if (index == 0) marginEnd = dp(10)
+                    }
+                }
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
             }
             addView(actions)
             lifecycleScope.launch { promptInput.setText(container.settings.replyPrompt()) }
@@ -1516,23 +1605,33 @@ class MainActivity : AppCompatActivity() {
             val relations = AppSettingsRepository.RELATION_TYPES
             var prompts = AppSettingsRepository.DEFAULT_RELATION_PROMPTS
             var selectedRelation = relations.first()
-            val relationSelector = settingsSpinner(relations).apply {
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 10)
+            val relationPromptInput = promptTextField("输入该关系的系统提示词", minLines = 3, maxLines = 6, top = 10)
+            lateinit var relationSelector: Button
+            relationSelector = modelConfigurationButton(selectedRelation, false) {
+                modelViews.choose("选择聊天关系", "为不同聊天对象配置独立的提示词。", relations, relations.indexOf(selectedRelation)) { index ->
+                    selectedRelation = relations[index]
+                    relationSelector.text = selectedRelation
+                    relationPromptInput.setText(prompts[selectedRelation] ?: AppSettingsRepository.DEFAULT_RELATION_PROMPTS.getValue(selectedRelation))
+                }
+            }.apply {
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                setTextColor(getColor(R.color.weike_text))
+                val chevron = getDrawable(R.drawable.ic_lucide_chevron_down)?.mutate()?.apply {
+                    setTint(getColor(R.color.weike_muted))
+                    setBounds(0, 0, dp(20), dp(20))
+                }
+                setCompoundDrawablesRelative(null, null, chevron, null)
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 10)
             }
             addView(relationSelector)
-            val relationPromptInput = promptTextField("输入该关系的系统提示词", minLines = 3, maxLines = 6, top = 10)
             addView(relationPromptInput)
-            relationSelector.onItemSelectedListener = simpleSelection { index ->
-                selectedRelation = relations[index]
-                relationPromptInput.setText(prompts[selectedRelation] ?: AppSettingsRepository.DEFAULT_RELATION_PROMPTS.getValue(selectedRelation))
-            }
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
-                addView(compactFormActionButton("恢复默认", false) {
+                addView(modelConfigurationButton("恢复默认", false) {
                     relationPromptInput.setText(AppSettingsRepository.DEFAULT_RELATION_PROMPTS.getValue(selectedRelation))
                 })
-                addView(compactFormActionButton("保存当前关系", true) {
+                addView(modelConfigurationButton("保存当前关系", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveRelationPrompt(selectedRelation, relationPromptInput.text.toString()) }
                             .onSuccess {
@@ -1543,7 +1642,12 @@ class MainActivity : AppCompatActivity() {
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
                 })
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12)
+                for (index in 0 until childCount) {
+                    getChildAt(index).layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                        if (index == 0) marginEnd = dp(10)
+                    }
+                }
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
             })
             lifecycleScope.launch {
                 prompts = container.settings.relationPrompts()
@@ -2145,13 +2249,15 @@ class MainActivity : AppCompatActivity() {
         load: suspend () -> ModelEndpointConfig,
         loadProvider: suspend () -> CloudProvider,
         save: suspend (ModelEndpointConfig, CloudProvider) -> Unit,
-        test: suspend (ModelEndpointConfig) -> Result<Unit>
+        test: suspend (ModelEndpointConfig) -> Result<Unit>,
+        actionsHost: LinearLayout? = null
     ) = card().apply {
-        val url = compactField("接口地址")
-        val apiKey = compactField("接口密钥").apply {
+        val url = modelViews.field("https://api.example.com/v1")
+        val apiKey = modelViews.field("输入 API Key").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        val model = compactField("模型名")
+        val model = modelViews.field("输入或读取模型名称")
+        val urlLabel = modelViews.label("接口地址")
         var selectedProvider = CloudProvider.CUSTOM
         var previousCustomUrl = ""
         val officialEndpoint = TextView(this@MainActivity).apply {
@@ -2180,6 +2286,7 @@ class MainActivity : AppCompatActivity() {
             val preset = cloudProviderPreset(provider, isAsr)
             val fixedEndpoint = provider != CloudProvider.CUSTOM && !provider.endpointRequiresUserValue
             url.visibility = if (fixedEndpoint) View.GONE else View.VISIBLE
+            urlLabel.visibility = url.visibility
             officialEndpoint.visibility = if (fixedEndpoint) View.VISIBLE else View.GONE
             if (fixedEndpoint) {
                 previousCustomUrl = url.text.toString().takeIf { it.isNotBlank() } ?: previousCustomUrl
@@ -2225,12 +2332,12 @@ class MainActivity : AppCompatActivity() {
             applyProvider(provider, replaceWithPreset = true)
         }
 
-        readModelsButton = compactFormActionButton("读取模型", false) {
+        readModelsButton = modelConfigurationButton("读取模型", false) {
             val config = currentConfig()
             val validationError = cloudEndpointKeyValidationError(config)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@compactFormActionButton
+                return@modelConfigurationButton
             }
             readModelsButton.isEnabled = false
             readModelsButton.text = "读取中"
@@ -2239,22 +2346,25 @@ class MainActivity : AppCompatActivity() {
                 readModelsButton.isEnabled = true
                 readModelsButton.text = "读取模型"
                 result.onSuccess { models ->
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("选择模型")
-                        .setItems(models.toTypedArray()) { _, index -> model.setText(models[index]) }
-                        .show()
+                    if (models.isEmpty()) {
+                        Toast.makeText(this@MainActivity, "该接口暂未返回可选模型，可手动填写模型名", Toast.LENGTH_LONG).show()
+                    } else {
+                        modelViews.choose("选择模型", "以下模型来自当前服务商，点击即可填入。", models, models.indexOf(model.text.toString())) { index ->
+                            model.setText(models[index])
+                        }
+                    }
                 }.onFailure { error ->
                     Toast.makeText(this@MainActivity, error.message ?: "读取模型失败", Toast.LENGTH_LONG).show()
                 }
             }
         }
         lateinit var testButton: Button
-        testButton = compactFormActionButton("测试连接", false) {
+        testButton = modelConfigurationButton("测试连接", false) {
             val config = currentConfig()
             val validationError = cloudConfigValidationError(config, isAsr)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@compactFormActionButton
+                return@modelConfigurationButton
             }
             testButton.isEnabled = false
             testButton.text = "测试中"
@@ -2269,26 +2379,41 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
-        val saveButton = compactFormActionButton("保存", true) {
+        lateinit var saveButton: Button
+        saveButton = modelConfigurationButton("保存配置", true) {
             val config = currentConfig()
             val validationError = cloudConfigValidationError(config, isAsr)
             if (validationError != null) {
                 Toast.makeText(this@MainActivity, validationError, Toast.LENGTH_SHORT).show()
-                return@compactFormActionButton
+                return@modelConfigurationButton
             }
+            saveButton.isEnabled = false
+            saveButton.text = "保存中…"
             lifecycleScope.launch {
-                save(config, selectedProvider)
-                Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                try {
+                    save(config, selectedProvider)
+                    Toast.makeText(this@MainActivity, "已保存", Toast.LENGTH_SHORT).show()
+                } catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    Toast.makeText(this@MainActivity, error.message ?: "保存失败，请重试", Toast.LENGTH_LONG).show()
+                } finally {
+                    saveButton.isEnabled = true
+                    saveButton.text = "保存配置"
+                }
             }
         }
+        addView(modelViews.label("模型服务商"))
         addView(picker, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), bottom = 10))
         addView(officialEndpoint)
         addView(protocolHint)
+        addView(urlLabel)
         addView(url)
+        addView(modelViews.label("API Key"))
         addView(apiKey)
+        addView(modelViews.label("模型名称"))
         addView(model)
         addView(readModelsButton, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), bottom = 8))
-        addView(LinearLayout(this@MainActivity).apply {
+        (actionsHost ?: this).addView(LinearLayout(this@MainActivity).apply {
             addView(testButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
             addView(saveButton, LinearLayout.LayoutParams(0, dp(48), 1f))
         })
