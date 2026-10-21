@@ -624,6 +624,30 @@ class MainActivity : AppCompatActivity() {
         // Silent daily check; never blocks or prompts on its own.
         lifecycleScope.launch { fetchLatestUpdate(silent = true) }
         showPage(if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else openPageFromIntent(intent) ?: Page.ACCOUNT)
+        maybeRequestMicPermission()
+    }
+
+    /** 首次打开引导授权麦克风：语音输入（录音转文字）依赖录音权限。 */
+    private fun maybeRequestMicPermission() {
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val preferences = getSharedPreferences("onboarding", MODE_PRIVATE)
+        val asked = preferences.getBoolean(KEY_MIC_PERMISSION_ASKED, false)
+        if (granted || asked) return
+        preferences.edit().putBoolean(KEY_MIC_PERMISSION_ASKED, true).apply()
+        themedDialog("开启麦克风权限", "用于键盘语音输入") { body, dialog ->
+            body.addView(TextView(this).apply {
+                text = "按住键盘上的麦克风说话，即可把语音实时转成文字。\n\n录音仅用于即时识别，不保存任何录音文件。"
+                textSize = 13f
+                setLineSpacing(dp(4).toFloat(), 1f)
+                setTextColor(getColor(R.color.weike_text))
+            })
+            body.addView(compactFormActionButton("开启麦克风", true) {
+                dialog.dismiss()
+                requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
+            body.addView(compactFormActionButton("稍后再说", false) { dialog.dismiss() },
+                margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
+        }.show()
     }
 
     /** IME setup-guide buttons jump straight to the subscription/model pages. */
@@ -3791,6 +3815,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val UPDATE_PREFERENCES = "update_check"
         const val EXTRA_OPEN_PAGE = "open_page"
+        const val ONBOARDING_PREFERENCES = "onboarding"
+        const val KEY_MIC_PERMISSION_ASKED = "mic_permission_asked"
         const val KEY_LAST_CHECK_AT = "last_check_at"
         const val KEY_PENDING_VERSION = "pending_version"
         const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
