@@ -12,6 +12,10 @@
     <!-- Landscape fallback: keeps the IME surface alive on HyperOS while its
          system input window is being recreated during rotation. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 截图识别回复：一键截屏走 MediaProjection 前台服务。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -44,6 +48,19 @@
             android:exported="false"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"
             android:excludeFromRecents="true" />
+
+        <!-- 一键截屏授权跳板：弹系统 MediaProjection 授权框后交给前台服务抓帧。 -->
+        <activity
+            android:name=".ScreenCaptureActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:noHistory="true"
+            android:excludeFromRecents="true" />
+
+        <service
+            android:name=".ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <service
             android:name=".ime.WeikeInputMethodService"

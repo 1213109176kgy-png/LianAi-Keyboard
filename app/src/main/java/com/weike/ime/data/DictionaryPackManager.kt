@@ -120,6 +120,7 @@ class DictionaryPackManager(context: Context) {
         onProgress: (DictionaryDownloadProgress) -> Unit = {}
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            ensureBundledDictionary()
             require(hasEnhancedDictionary()) { "Download the enhanced dictionary first" }
             val destination = File(appContext.filesDir, "rime/user/$WANXIANG_FILE")
             val partial = File(destination.parentFile, ".$WANXIANG_FILE.part")
@@ -138,9 +139,38 @@ class DictionaryPackManager(context: Context) {
         }
     }
 
+    /** Called on the decoder worker before opening Rime; never needs a network connection. */
+    fun ensureBundledDictionary() = synchronized(BUNDLED_INSTALL_LOCK) {
+        if (activeBundleDir() != null) return@synchronized
+        root.mkdirs()
+        val archive = File(root, ".bundled-enhanced.zip")
+        val staging = File(root, ".bundled-enhanced-staging")
+        try {
+            appContext.assets.open(BUNDLED_ENHANCED_ASSET).use { input ->
+                archive.outputStream().use(input::copyTo)
+            }
+            require(archive.length() == ENHANCED_PACK.sizeBytes && sha256(archive).equals(ENHANCED_PACK.sha256, true)) {
+                "Bundled dictionary checksum failed"
+            }
+            staging.deleteRecursively()
+            staging.mkdirs()
+            extractSafely(archive, staging)
+            require(ROOT_FILES.all { File(staging, it).isFile } &&
+                BUILD_FILES.all { File(staging, "build/$it").isFile } &&
+                AUXILIARY_FILES.all { File(staging, it).isFile } &&
+                File(staging, "build/weike_pinyin.table.bin").length() >= MIN_TABLE_BYTES) {
+                "Bundled dictionary is incomplete"
+            }
+            atomicActivate(staging)
+        } finally {
+            archive.delete()
+            staging.deleteRecursively()
+        }
+    }
+
     fun hasEnhancedDictionary(): Boolean = activeBundleDir()?.let { bundle ->
         File(bundle, "build/melt_eng.table.bin").isFile
-    } == true
+    } ?: true // A fresh installation uses the verified enhanced bundle shipped in the APK.
 
     fun isWanxiangEnabled(): Boolean = File(appContext.filesDir, "rime/user/$WANXIANG_FILE").isFile &&
         File(appContext.filesDir, "rime/user/.wanxiang_enabled").isFile
@@ -441,6 +471,8 @@ class DictionaryPackManager(context: Context) {
     }
 
     companion object {
+        private val BUNDLED_INSTALL_LOCK = Any()
+        private const val BUNDLED_ENHANCED_ASSET = "dictionaries/rime-ice-enhanced-2026.07.20.zip"
         // Add the COS/CDN manifest URL before the GitHub URL when it is ready.
         // Every source must serve the same signed envelope.
         val CATALOG_URLS = listOf(
@@ -464,7 +496,7 @@ class DictionaryPackManager(context: Context) {
             sha256 = "b870605c963d7c8caa05ed9e2c5e095475014d98dbeccd2cb4782e3659463447",
             urls = listOf("https://vertick-1257312282.cos.ap-guangzhou.myqcloud.com/rime-ice-enhanced-2026.07.20.zip"),
             license = "GPL-3.0-or-later",
-            enabledByDefault = false
+            enabledByDefault = true
         )
         private const val WANXIANG_FILE = "wanxiang-lts-zh-hans.gram"
         private const val WANXIANG_URL = "https://vertick-1257312282.cos.ap-guangzhou.myqcloud.com/wanxiang-lts-zh-hans.gram"

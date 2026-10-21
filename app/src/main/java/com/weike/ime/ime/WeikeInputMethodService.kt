@@ -77,6 +77,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -142,6 +143,12 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private var candidateTextSizeLevel = AppSettingsRepository.DEFAULT_CANDIDATE_TEXT_SIZE_LEVEL
     private var englishAutoCapitalize = true
     private var doubleSpacePeriod = false
+    // The nine-key "，。?!" key commits a comma up front and opens the strip.
+    // If the user then picks a different mark, that leading comma was a
+    // placeholder and must be replaced, not accumulated ("你好，？" -> "你好？").
+    private var autoPunctuationPending = false
+    private var autoPunctuationAtMs = 0L
+    private var autoPunctuationText = ""
     private var keyboardTheme = KeyboardTheme.DARK
     private var keyboardThemePreference = KeyboardTheme.DARK
     private var expressionOptimization = false
@@ -151,7 +158,123 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     // Unlike pinyinBuffer this keeps the actual decoder code. They differ for T9:
     // the editor displays "ni" while the decoder must retain "64".
     private var pinyinRawBuffer = ""
+    // "reply" = 帮你回 needs setup, "polish" = 超会说 needs setup; null = off.
+    private var aiGuide: String? = null
+    private val subscriptionTextClient = com.weike.ime.network.SubscriptionTextClient()
+    private val subscriptionClient by lazy { com.weike.ime.network.SubscriptionClient() }
+    // 会话级缓存：订阅文本通道 404（未上线）后 10 分钟内不再尝试；
+    // 额度类失败缓存 60 秒，避免连点时反复打失败请求。
+    private var subscriptionTextBlockedUntilMs = 0L
+    private var subscriptionStateCache: Pair<String, Long>? = null
+
+    private enum class AiChannel { CUSTOM, SUBSCRIPTION }
+
+    /** 订阅文本通道是否值得一试（会话级 404 缓存）。 */
+    private fun subscriptionTextReady(): Boolean =
+        SystemClock.elapsedRealtime() >= subscriptionTextBlockedUntilMs
+
+    private fun noteSubscriptionTextOutcome(error: Throwable) {
+        val message = generateSequence(error as Throwable?) { it.cause }
+            .joinToString(" ") { it.message.orEmpty() }
+        val blockedFor = when {
+            message.contains(com.weike.ime.network.SubscriptionTextClient.CHANNEL_NOT_LIVE) -> 10 * 60_000L
+            message.contains("额度不足") || message.contains("已失效") -> 60_000L
+            else -> 0L
+        }
+        if (blockedFor > 0) subscriptionTextBlockedUntilMs = SystemClock.elapsedRealtime() + blockedFor
+    }
+
+    /** active / expired(含未订阅) / unknown，60 秒缓存。 */
+    private suspend fun subscriptionState(token: String): String {
+        val cached = subscriptionStateCache
+        if (cached != null && SystemClock.elapsedRealtime() - cached.second < 60_000L) return cached.first
+        val state = subscriptionClient.subscription(token)
+            .map { if (it.active) "active" else "expired" }
+            .getOrDefault("unknown")
+        subscriptionStateCache = state to SystemClock.elapsedRealtime()
+        return state
+    }
+
+    /**
+     * 文本 AI 通道策略：配置了自定义模型就优先走自定义，失败自动切订阅；
+     * 未配置则只走订阅。任一通道成功立即返回；全部失败时按订阅状态+
+     * 自定义配置给出准确的失败分类。
+     */
+    private suspend fun resolveAiOptions(
+        scene: String,
+        content: String,
+        relation: String
+    ): Pair<List<String>?, String?> {
+        val custom = container.settings.customTextConfig.first()
+        val customUsable = custom.isComplete()
+        val token = container.userSession.token()
+
+        val order = buildList {
+            if (customUsable) add(AiChannel.CUSTOM)
+            if (token != null && subscriptionTextReady()) add(AiChannel.SUBSCRIPTION)
+        }
+
+        var customError: Throwable? = null
+        var subError: Throwable? = null
+        for (channel in order) {
+            val result = when (channel) {
+                AiChannel.CUSTOM -> {
+                    val direct = MimoTextPolisher(
+                        endpointProvider = { custom },
+                        replyPromptProvider = { replyPrompt },
+                        polishRelationProvider = { polishRelation },
+                        relationPromptsProvider = { relationPrompts }
+                    )
+                    if (scene == "reply") direct.suggestReplies(content)
+                    else direct.suggestPolishes(content, relation)
+                }
+                AiChannel.SUBSCRIPTION -> subscriptionTextClient
+                    .suggestions(token.orEmpty(), scene, content, relation)
+                    .onFailure(::noteSubscriptionTextOutcome)
+            }
+            result.onSuccess { options ->
+                if (options.isNotEmpty()) return options to null
+            }.onFailure { error ->
+                when (channel) {
+                    AiChannel.CUSTOM -> customError = error
+                    AiChannel.SUBSCRIPTION -> subError = error
+                }
+            }
+        }
+
+        val variant = when {
+            order.isEmpty() -> "none"
+            customUsable && customError != null && subError == null -> "custom_down"
+            subError != null && customError != null -> {
+                val subMessage = subError?.let {
+                    generateSequence(it as Throwable?) { it.cause }.joinToString(" ") { it.message.orEmpty() }
+                }.orEmpty()
+                when {
+                    subMessage.contains(com.weike.ime.network.SubscriptionTextClient.CHANNEL_NOT_LIVE) -> "custom_down"
+                    subMessage.contains("额度不足") -> "sub_quota"
+                    subStateIsExpired(token) -> "sub_expired"
+                    else -> "sub_pending"
+                }
+            }
+            subError != null -> {
+                val message = subError?.let { generateSequence(it as Throwable?) { it.cause }.joinToString(" ") { it.message.orEmpty() } }.orEmpty()
+                when {
+                    message.contains(com.weike.ime.network.SubscriptionTextClient.CHANNEL_NOT_LIVE) -> "sub_pending"
+                    message.contains("额度不足") -> "sub_quota"
+                    subStateIsExpired(token) -> "sub_expired"
+                    else -> "sub_pending"
+                }
+            }
+            else -> "none"
+        }
+        return null to variant
+    }
+
+    private suspend fun subStateIsExpired(token: String?): Boolean =
+        token != null && subscriptionState(token) == "expired"
     private var pinyinCandidates: List<PinyinCandidate> = emptyList()
+    private var spellingOptions: List<String> = emptyList()
+    private var selectedSpelling = ""
     private var predictionCandidates: List<PredictionCandidate> = emptyList()
     private var predictionEnabled = true
     private var predictionLearningEnabled = true
@@ -224,7 +347,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 quickImeSwitcherEnabled, candidateTextSizeLevel, englishAutoCapitalize, shouldAutoCapitalizeEnglish(), keyboardLogo,
                 currentRecentClipboard(), keyboardHeightLevel, keyboardBottomOffsetLevel, punctuationShortcuts,
                 cursorSliderEnabled, polishDraft, polishCursor, polishOptions, polishLoading,
-                replyOptions, replyLoading, replyEmotion, enterActionLabel(), dictationActive, screenshotReplyEnabled
+                replyOptions, replyLoading, replyEmotion, enterActionLabel(), dictationActive, screenshotReplyEnabled,
+                spellingOptions, selectedSpelling, aiGuide
             )
         }
     }
@@ -822,11 +946,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         Log.d(TAG, "onStartInputView; restarting=$restarting; mode=$mode; pinyin=${pinyinRawBuffer.length}; english=${englishBuffer.length}")
         super.onStartInputView(info, restarting)
         inputViewActive = true
+        autoPunctuationPending = false
         if (pendingAskRestore) {
             pendingAskRestore = false
             if (!sensitiveField && mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
         }
         presentRecentClipboardForInputView()
+        // A reopened keyboard must land on the letter grid, never on the emoji
+        // panel or a stale punctuation strip left over from the last session.
+        if (::keyboard.isInitialized) keyboard.resetTransientPanels()
         // Some Xiaomi builds recreate only the input view. Reassert the composing
         // value against the newly supplied InputConnection in that case.
         if (pinyinBuffer.isNotBlank()) updateComposingText(pinyinBuffer)
@@ -1156,6 +1284,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private fun startDictationInternal() {
         if (!dictationArmed) return
         dictationArmed = false
+        // Both the builtin channel (key missing) and user config (incomplete)
+        // unusable: fail fast with a clear message instead of recording into
+        // a transcriber that can never succeed.
+        val asrEndpoint = cloudApiSettings.asr.takeIf { it.isComplete() } ?: BUILTIN_ASR_CONFIG
+        if (!asrEndpoint.isComplete()) {
+            toast("语音识别通道未就绪，请稍后再试，或在设置中配置自定义语音接口")
+            render()
+            return
+        }
         dictationActive = true
         dictationPartial = ""
         dictationBuffer.clear()
@@ -1293,12 +1430,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             return
         }
         runCatching {
+            // 一键截屏：系统授权一次，前台服务抓单帧并裁掉键盘区域后回传。
             startActivity(
-                android.content.Intent(this, ImagePickerActivity::class.java)
+                android.content.Intent(this, com.weike.ime.ScreenCaptureActivity::class.java)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra(com.weike.ime.ScreenCaptureActivity.EXTRA_CROP_BOTTOM,
+                        if (::keyboard.isInitialized) keyboard.height else 0)
             )
         }.onFailure {
-            voiceState = VoiceUiState.Error("无法打开相册：${it.message}")
+            voiceState = VoiceUiState.Error("无法启动截屏：${it.message}")
             render()
         }
     }
@@ -1428,6 +1568,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (source.isBlank()) return
         replyLoading = true
         replyOptions = emptyList()
+        aiGuide = null
         replyEmotion = when {
             Regex("难过|伤心|生气|失望|讨厌|不开心").containsMatchIn(source) -> "需要安慰"
             Regex("吗|呢|一起|想请|有空|期待").containsMatchIn(source) -> "开心期待"
@@ -1436,18 +1577,24 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         voiceState = VoiceUiState.Idle
         render()
         serviceScope.launch {
-            polisher.suggestReplies(source).onSuccess {
-                replyLoading = false
-                replyOptions = it
-                render()
-            }.onFailure {
-                replyLoading = false
-                Log.w(TAG, "Reply suggestions unavailable; using local fallback", it)
-                replyOptions = SuggestionFallback.replies(source)
-                replyEmotion = AiFallbackReason.replyLabel(it)
-                voiceState = VoiceUiState.Idle
-                render()
+            val (options, variant) = resolveAiOptions("reply", source, "通用")
+            replyLoading = false
+            if (options != null) {
+                aiGuide = null
+                replyOptions = options
+                replyEmotion = when {
+                    Regex("难过|伤心|生气|失望|讨厌|不开心").containsMatchIn(source) -> "需要安慰"
+                    Regex("吗|呢|一起|想请|有空|期待").containsMatchIn(source) -> "开心期待"
+                    else -> "友好交流"
+                }
+            } else {
+                Log.w(TAG, "Reply suggestions unavailable; variant=$variant")
+                aiGuide = "reply:$variant"
+                replyOptions = emptyList()
+                replyEmotion = ""
             }
+            voiceState = VoiceUiState.Idle
+            render()
         }
     }
 
@@ -1486,19 +1633,21 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         }
         polishLoading = true
         polishOptions = emptyList()
+        aiGuide = null
         render()
         serviceScope.launch {
-            polisher.suggestPolishes(source, polishRelation).onSuccess { options ->
-                polishLoading = false
+            val (options, variant) = resolveAiOptions("polish", source, polishRelation)
+            polishLoading = false
+            if (options != null) {
+                aiGuide = null
                 polishOptions = options
-                render()
-            }.onFailure {
-                polishLoading = false
-                Log.w(TAG, "Polish suggestions unavailable; using local fallback", it)
-                polishOptions = SuggestionFallback.polishes(source, polishRelation)
-                voiceState = VoiceUiState.Idle
-                render()
+            } else {
+                Log.w(TAG, "Polish suggestions unavailable; variant=$variant")
+                aiGuide = "polish:$variant"
+                polishOptions = emptyList()
             }
+            voiceState = VoiceUiState.Idle
+            render()
         }
     }
 
@@ -2327,8 +2476,44 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         } else commitTextAndPredict(value)
     }
 
+    override fun punctuationKeyTapped() {
+        autoPunctuationPending = false
+        typeEnglish("，")
+        autoPunctuationPending = true
+        autoPunctuationAtMs = SystemClock.elapsedRealtime()
+        autoPunctuationText = "，"
+    }
+
+    override fun choosePunctuation(symbol: String) {
+        val autoPunctFresh = autoPunctuationPending &&
+            SystemClock.elapsedRealtime() - autoPunctuationAtMs <= AUTO_PUNCTUATION_WINDOW_MS
+        if (mode == KeyboardMode.VOICE) {
+            // The Super Say draft lives outside the InputConnection, so the
+            // placeholder comma must be removed from the draft buffer instead.
+            if (autoPunctFresh && polishCursor == polishDraft.length && polishDraft.endsWith(autoPunctuationText)) {
+                val edit = DraftEditor.deleteBefore(polishDraft, polishCursor)
+                polishDraft = edit.text
+                polishCursor = edit.cursor
+                polishOptions = emptyList()
+            }
+            autoPunctuationPending = false
+            typeEnglish(symbol)
+            return
+        }
+        val connection = currentInputConnection
+        if (autoPunctFresh && connection != null && !sensitiveField &&
+            pinyinRawBuffer.isBlank() && englishBuffer.isBlank() &&
+            connection.getTextBeforeCursor(1, 0)?.toString() == autoPunctuationText
+        ) {
+            connection.deleteSurroundingText(1, 0)
+        }
+        autoPunctuationPending = false
+        typeEnglish(symbol)
+    }
+
     override fun typeEnglishLetter(value: String) {
         resetDoubleSpacePeriod()
+        autoPunctuationPending = false
         clearPredictions()
         englishBuffer += value
         englishCandidates = EnglishCandidateEngine.candidates(englishBuffer)
@@ -2339,6 +2524,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     override fun typePinyin(value: String) {
         engineIdleReleaseJob?.cancel()
         if (value.length != 1) return
+        autoPunctuationPending = false
         if (pendingPinyinLetters.isEmpty()) clearPredictions()
         pendingPinyinMutations += 1
         pendingPinyinLetters.append(value.lowercase())
@@ -2371,6 +2557,33 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 commitNativePinyin(state, state.committedText, targetConnection)
             }
         }
+    }
+
+    override fun choosePinyinSpelling(spelling: String) {
+        flushPendingPinyinBatch()
+        enqueuePinyin { applyPinyinState(pinyinDecoder.selectSpelling(spelling), allowCommit = false) }
+    }
+
+    override fun dismissPredictions() {
+        clearPredictions(clearContext = true)
+    }
+
+    override fun dismissAiGuide() {
+        aiGuide = null
+        replyOptions = emptyList()
+        replyLoading = false
+        polishOptions = emptyList()
+        polishLoading = false
+        render()
+    }
+
+    override fun openAiSetup(page: String) {
+        val intent = android.content.Intent(this, com.weike.ime.MainActivity::class.java).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(com.weike.ime.MainActivity.EXTRA_OPEN_PAGE, page)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { toast("请打开恋爱键盘 App 进行配置") }
     }
 
     override fun chooseEnglishCandidate(value: String) {
@@ -2425,6 +2638,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun backspace() {
         resetDoubleSpacePeriod()
+        autoPunctuationPending = false
         clearPredictions()
         flushPendingPinyinBatch()
         if ((mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) && (pinyinRawBuffer.isNotEmpty() || pendingPinyinMutations > 0)) {
@@ -2749,6 +2963,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         pinyinBuffer = displayPinyinComposition(state, previousRaw, previousDisplay)
         pinyinRawBuffer = state.rawComposition
         pinyinCandidates = state.candidates
+        spellingOptions = state.spellingOptions
+        selectedSpelling = state.selectedSpelling
         updateComposingText(pinyinBuffer)
         render()
     }
@@ -2773,7 +2989,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         // string. This prevents raw codes such as "64 426" from leaking into
         // the target editor while still showing the complete "nihao" reading.
         val readings = state.candidates.asSequence()
-            .map { candidate -> pinyinDecoder.pinyinForDisplay(candidate.text).replace(" ", "") }
+            .map { candidate -> candidate.reading.ifBlank { pinyinDecoder.pinyinForDisplay(candidate.text) }.replace(" ", "") }
             .filter(String::isNotBlank)
             .toList()
         return NineKeyComposition.display(t9Code, state.preedit, readings, previousRaw, previousDisplay)
@@ -3175,6 +3391,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         private const val PREDICTION_CONTEXT_LIMIT = 16
         private const val INPUT_VIEW_RECOVERY_WINDOW_MS = 5_000L
         private const val DOUBLE_SPACE_PERIOD_WINDOW_MS = 350L
+        private const val AUTO_PUNCTUATION_WINDOW_MS = 10_000L
         private const val RECENT_CLIPBOARD_WINDOW_MS = 15_000L
         private const val QUICK_PASTE_VISIBLE_WINDOW_MS = 5_000L
         private const val DICTATION_PARTIAL_INTERVAL_MS = 1_400L

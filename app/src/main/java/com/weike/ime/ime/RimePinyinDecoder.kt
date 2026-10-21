@@ -24,14 +24,17 @@ data class PinyinCandidate(
     val score: Double = 0.0,
     /** librime global candidate index; -1 means an application-owned candidate. */
     val index: Int = -1,
-    val directCommit: Boolean = false
+    val directCommit: Boolean = false,
+    val reading: String = ""
 )
 
 data class PinyinSessionState(
     val preedit: String = "",
     val candidates: List<PinyinCandidate> = emptyList(),
     val committedText: String? = null,
-    val rawComposition: String = preedit
+    val rawComposition: String = preedit,
+    val spellingOptions: List<String> = emptyList(),
+    val selectedSpelling: String = ""
 )
 
 /** Serializes every mutation of the active Chinese composition. */
@@ -47,6 +50,7 @@ interface PinyinDecoder {
     suspend fun selectCandidate(index: Int): PinyinSessionState
     suspend fun commitFirst(): PinyinSessionState
     suspend fun currentState(): PinyinSessionState
+    suspend fun selectSpelling(spelling: String): PinyinSessionState
     suspend fun selectChineseKeyboardLayout(layout: ChineseKeyboardLayout): Boolean
     suspend fun syncProfessionalTerms(terms: List<LexiconTerm>, typingDictionary: List<TypingDictionaryEntry>): Boolean
     suspend fun syncUserLearning(entries: List<PinyinLearning>): Boolean
@@ -76,6 +80,9 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
     private var overlayEntries: List<OverlayEntry> = emptyList()
     private var overlayEntriesByInitial: Map<Char, List<OverlayEntry>> = emptyMap()
     private var migratedLearning: Map<String, PinyinLearning> = emptyMap()
+    private var selectedSpelling = ""
+    private var spellingPrefix = ""
+    private var allTermReadings: Map<Char, List<String>>? = null
 
     @Volatile override var isReady = false
         private set
@@ -114,6 +121,7 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
     }
 
     override suspend fun clear(): PinyinSessionState = nativeState {
+        selectedSpelling = ""
         if (!isReady) return@nativeState PinyinSessionState()
         Rime.clearRimeComposition()
         snapshot()
@@ -121,18 +129,49 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
 
     override suspend fun input(value: String): PinyinSessionState = nativeState {
         if (!isReady || value.length != 1) return@nativeState PinyinSessionState()
-        Rime.processRimeKey(value[0].code, 0)
-        snapshot()
+        inputKeys(value)
     }
 
     override suspend fun inputBatch(values: String): PinyinSessionState = nativeState {
         if (!isReady || values.isBlank()) return@nativeState PinyinSessionState()
-        values.forEach { value -> Rime.processRimeKey(value.code, 0) }
-        snapshot()
+        inputKeys(values)
+    }
+
+    /** Recover an unmatchable T9 continuation before raw numeric codes reach the editor. */
+    private fun inputKeys(values: String): PinyinSessionState {
+        val commits = StringBuilder()
+        var state = snapshot()
+        state.committedText?.let(commits::append)
+        val nineKey = Rime.getRimeStatus().schemaId == T9_SCHEMA_ID
+        values.forEach { value ->
+            // Also recover a stale invalid composition left by an older app version.
+            if (nineKey && state.rawComposition.isNotBlank() && state.candidates.isEmpty()) {
+                Rime.clearRimeComposition()
+                state = snapshot()
+            }
+            Rime.processRimeKey(value.code, 0)
+            state = snapshot()
+            state.committedText?.let(commits::append)
+            if (nineKey && value in '2'..'9' && state.rawComposition.isNotBlank() && state.candidates.isEmpty()) {
+                Rime.processRimeKey(KEY_BACKSPACE, 0)
+                // Keep the last valid composition rather than silently selecting a word.
+                state = snapshot()
+                state.committedText?.let(commits::append)
+                if (state.candidates.isEmpty() && state.rawComposition.isNotBlank()) {
+                    Rime.clearRimeComposition()
+                    state = snapshot()
+                }
+            }
+        }
+        return state.copy(committedText = commits.toString().takeIf(String::isNotBlank))
     }
 
     override suspend fun backspace(): PinyinSessionState = nativeState {
         if (!isReady) return@nativeState PinyinSessionState()
+        if (selectedSpelling.isNotBlank()) {
+            selectedSpelling = ""
+            return@nativeState snapshot()
+        }
         Rime.processRimeKey(KEY_BACKSPACE, 0)
         snapshot()
     }
@@ -148,6 +187,7 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
 
     override suspend fun selectCandidate(index: Int): PinyinSessionState = nativeState {
         if (!isReady || index < 0) return@nativeState PinyinSessionState()
+        selectedSpelling = ""
         Rime.selectRimeCandidate(index, true)
         snapshot()
     }
@@ -158,7 +198,17 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
         if (isReady) snapshot() else PinyinSessionState()
     }
 
+    override suspend fun selectSpelling(spelling: String): PinyinSessionState = nativeState {
+        val current = snapshot()
+        if (spelling.isBlank() || spelling in current.spellingOptions) {
+            selectedSpelling = spelling
+            spellingPrefix = NineKeyComposition.codeFor(spelling)
+        }
+        snapshot()
+    }
+
     override suspend fun selectChineseKeyboardLayout(layout: ChineseKeyboardLayout): Boolean = nativeState {
+        selectedSpelling = ""
         if (!isReady) return@nativeState false
         val schema = if (layout == ChineseKeyboardLayout.NINE_KEY) T9_SCHEMA_ID else SCHEMA_ID
         Rime.selectRimeSchema(schema).also { if (it) Rime.clearRimeComposition() }
@@ -268,6 +318,9 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
         // remaining live segment. Keep both: one for decoder state and one for
         // what the editor must render.
         val rawComposition = context.input.ifBlank { context.composition.preedit.orEmpty() }
+        val code = rawComposition.filter(Char::isDigit)
+        val nineKey = Rime.getRimeStatus().schemaId == T9_SCHEMA_ID && code.isNotBlank()
+        if (!nineKey || !code.startsWith(spellingPrefix)) selectedSpelling = ""
         val preedit = context.composition.preedit.orEmpty().ifBlank { rawComposition }
         val overlay = overlayEntriesByInitial[rawComposition.firstOrNull()?.lowercaseChar()].orEmpty().asSequence()
             .filter { it.matches(compactPinyin(rawComposition)) }
@@ -279,15 +332,53 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
         } else {
             nativeCandidates
         }
+        val annotated = (overlay + nativeOrdered).distinctBy { it.text }.take(MAX_CANDIDATES).map { candidate ->
+            candidate.copy(reading = if (nineKey) readingForNineKey(candidate.text, code) else pinyinForDisplay(candidate.text))
+        }
+        val options = if (nineKey) NineKeyComposition.spellingOptions(code, annotated.map { it.reading }) else emptyList()
+        var filtered = if (selectedSpelling.isBlank()) annotated else annotated.filter {
+            it.reading.substringBefore(' ').startsWith(selectedSpelling)
+        }
+        if (filtered.isEmpty() && annotated.isNotEmpty()) {
+            selectedSpelling = ""
+            filtered = annotated
+        }
         return PinyinSessionState(
             preedit = preedit,
-            candidates = (overlay + nativeOrdered).distinctBy { it.text }.take(MAX_CANDIDATES),
+            candidates = filtered,
             committedText = Rime.getRimeCommit().text?.takeIf(String::isNotBlank),
-            rawComposition = rawComposition
+            rawComposition = rawComposition,
+            spellingOptions = options,
+            selectedSpelling = selectedSpelling
         )
     }
 
+    private fun readingForNineKey(text: String, code: String): String {
+        val readings = allTermReadings ?: buildMap<Char, List<String>> {
+            appContext.assets.open("pinyin/pinyin.txt").bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val match = CHAR_READING.matchEntire(line.substringBefore('#').trim()) ?: return@forEach
+                    val char = bmpPinyinCharacter(match.groupValues[1]) ?: return@forEach
+                    put(char, match.groupValues[2].split(',').map { value ->
+                        Normalizer.normalize(value.lowercase(), Normalizer.Form.NFD).filter { it in 'a'..'z' }
+                    }.filter(String::isNotBlank))
+                }
+            }
+        }.also { allTermReadings = it }
+        var remaining = code
+        return text.mapNotNull { char ->
+            val variants = readings[char] ?: return@mapNotNull null
+            val reading = variants.firstOrNull {
+                val digits = NineKeyComposition.codeFor(it)
+                remaining.startsWith(digits) || digits.startsWith(remaining)
+            } ?: variants.firstOrNull() ?: return@mapNotNull null
+            remaining = remaining.drop(NineKeyComposition.codeFor(reading).length.coerceAtMost(remaining.length))
+            reading
+        }.joinToString(" ")
+    }
+
     private fun prepareFiles() {
+        DictionaryPackManager(appContext).ensureBundledDictionary()
         sharedDir.mkdirs()
         userDir.mkdirs()
         val activeBundle = DictionaryPackManager(appContext).activeBundleDir()
@@ -383,7 +474,7 @@ class RimePinyinDecoder(context: Context) : PinyinDecoder {
         appContext.assets.open("pinyin/pinyin.txt").bufferedReader().useLines { lines ->
             lines.forEach { line ->
                 val match = CHAR_READING.matchEntire(line.substringBefore('#').trim()) ?: return@forEach
-                val character = match.groupValues[1].toIntOrNull(16)?.toChar() ?: return@forEach
+                val character = bmpPinyinCharacter(match.groupValues[1]) ?: return@forEach
                 val reading = Normalizer.normalize(match.groupValues[2].substringBefore(',').lowercase(), Normalizer.Form.NFD)
                     .filter { it in 'a'..'z' }
                 if (reading.isNotBlank()) values[character] = reading

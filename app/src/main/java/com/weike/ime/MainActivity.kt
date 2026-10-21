@@ -623,11 +623,27 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { applyKeyboardTheme(container.settings.keyboardTheme()) }
         // Silent daily check; never blocks or prompts on its own.
         lifecycleScope.launch { fetchLatestUpdate(silent = true) }
-        showPage(if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else Page.ACCOUNT)
+        showPage(if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else openPageFromIntent(intent) ?: Page.ACCOUNT)
+    }
+
+    /** IME setup-guide buttons jump straight to the subscription/model pages. */
+    private fun openPageFromIntent(intent: Intent?): Page? = when (intent?.getStringExtra(EXTRA_OPEN_PAGE)) {
+        "SUBSCRIPTION" -> Page.SUBSCRIPTION
+        "CLOUD" -> Page.CLOUD
+        else -> null
     }
 
     override fun onResume() {
         super.onResume()
+        // Coming back from IME settings / the picker: if the keyboard is now
+        // enabled and selected, the setup guide is obsolete — close it.
+        val selected = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD).orEmpty()
+        if (selected.startsWith(packageName) &&
+            getSystemService(InputMethodManager::class.java).enabledInputMethodList.any { it.packageName == packageName }
+        ) {
+            keyboardSetupDialog?.takeIf { it.isShowing }?.dismiss()
+        }
+        keyboardSetupDialog = null
         pendingPurchase()?.takeIf { it.orderId.isNotBlank() }?.let { pending ->
             container.userSession.token()?.let { startOrderPolling(pending.orderId, it) }
         }
@@ -641,6 +657,10 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        openPageFromIntent(intent)?.let {
+            showPage(it)
+            return
+        }
         if (isPaymentReturn(intent)) {
             // The browser/deep link carries no proof of payment. Query only
             // the persisted order belonging to the currently signed-in user.
@@ -799,9 +819,11 @@ class MainActivity : AppCompatActivity() {
         }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 10))
 
         addView(section("核心功能"))
+        // Icon trio follows one warm-rose palette: brand pink, brand orange,
+        // rose red — no stray coral/saturated hues.
         addView(homeFeatureCard(R.drawable.ic_lucide_message_circle_more, "AI智能回复", "粘贴对方消息，一键生成高情商回复", Color.rgb(255, 107, 157)))
         addView(homeFeatureCard(R.drawable.ic_lucide_wand_sparkles, "话术优化", "把你想说的话润色优化，表达更有魅力", Color.rgb(255, 160, 122)), margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
-        addView(homeFeatureCard(R.drawable.ic_lucide_zap, "情感分析", "AI读懂TA的情绪和暗示，回复不再尴尬", Color.rgb(255, 71, 87)), margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
+        addView(homeFeatureCard(R.drawable.ic_lucide_zap, "情感分析", "AI读懂TA的情绪和暗示，回复不再尴尬", Color.rgb(231, 84, 128)), margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
 
         addView(section("如何使用 · 4步快速上手"))
         addView(card().apply {
@@ -809,7 +831,7 @@ class MainActivity : AppCompatActivity() {
             addDivider(this)
             addView(homeStep("2", "切换输入法", "在输入框中选择恋爱键盘") { getSystemService(InputMethodManager::class.java).showInputMethodPicker() })
             addDivider(this)
-            addView(homeStep("3", "配置文本模型", "选择 DeepSeek、Kimi 或自定义接口") {
+            addView(homeStep("3", "配置AI大模型", "购买套餐免配置，或填自己的模型接口") {
                 cloudReturnPage = Page.ACCOUNT
                 showPage(Page.CLOUD)
             })
@@ -836,6 +858,12 @@ class MainActivity : AppCompatActivity() {
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
             ).apply { cornerRadius = dp(24).toFloat() }
+            // The hero card doubles as the login/logout entry: tapping it when
+            // logged out opens the auth dialog, when logged in it offers logout.
+            setOnClickListener {
+                if (sessionUser == null) showLoginDialog()
+                else confirmLogout()
+            }
             addView(ImageView(this@MainActivity).apply {
                 setImageResource(R.drawable.logo_lianai_app)
                 background = roundedBackground(Color.WHITE, 18)
@@ -845,18 +873,35 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), 0, 0, 0)
                 addView(TextView(this@MainActivity).apply {
-                    text = sessionUser?.maskedPhone ?: "恋爱达人"
+                    text = if (sessionUser != null) sessionUser.maskedPhone else "未登录"
                     textSize = 14f
                     typeface = Typeface.DEFAULT_BOLD
                     setTextColor(Color.WHITE)
                 })
-                addView(TextView(this@MainActivity).apply {
-                    text = if (sessionUser != null) "已登录 · 购买订阅无需再次验证"
-                    else "恋爱键盘 · 登录后可购买订阅套餐"
+                val heroSubtitle = TextView(this@MainActivity).apply {
+                    text = if (sessionUser != null) "未购买套餐" else "点击登录或注册"
                     textSize = 12f
                     setTextColor(Color.argb(225, 255, 255, 255))
-                })
+                }
+                addView(heroSubtitle)
+                // Refresh the second line with the live subscription once it loads.
+                if (sessionUser != null) {
+                    lifecycleScope.launch {
+                        val token = container.userSession.token() ?: return@launch
+                        subscriptionClient.subscription(token).onSuccess { status ->
+                            if (status.active) {
+                                val expire = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA)
+                                    .format(java.util.Date(status.expiresAt))
+                                heroSubtitle.text = "${status.planName} · $expire 到期"
+                            }
+                        }
+                    }
+                }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_lucide_chevron_right)
+                setColorFilter(Color.WHITE)
+            }, LinearLayout.LayoutParams(dp(20), dp(20)))
         })
 
         addView(section("订阅"))
@@ -864,49 +909,35 @@ class MainActivity : AppCompatActivity() {
             addView(
                 actionRow(
                     "订阅套餐",
-                    if (sessionUser != null) "查看套餐与订阅状态" else "购买套餐需先登录"
+                    if (sessionUser != null) "查看套餐与订阅状态" else "购买套餐需先登录",
+                    icon = R.drawable.ic_lucide_zap
                 ) { showPage(Page.SUBSCRIPTION) }
             )
         })
-        addView(section("账号"))
-        addView(card().apply {
-            if (sessionUser == null) {
-                addView(actionRow("登录 / 注册", "仅购买订阅套餐时需要登录") { showLoginDialog() })
-            } else {
-                addView(actionRow("手机账号", sessionUser.maskedPhone) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "账号 ${sessionUser.phone}，登录状态有效期内无需重复登录",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                })
-                addDivider(this)
-                addView(actionRow("退出登录", "清除本机登录状态", destructive = true) { confirmLogout() })
-            }
-        })
         addView(section("功能与设置"))
         addView(card().apply {
-            addView(actionRow("设置", "键盘、AI、数据与权限") { showPage(Page.SETTINGS) })
+            addView(actionRow("设置", "键盘、AI、数据与权限", icon = R.drawable.ic_lucide_sliders_horizontal) { showPage(Page.SETTINGS) })
             addDivider(this)
-            addView(actionRow("键盘效果预览", "打开真实输入测试") { showPage(Page.TEST) })
+            addView(actionRow("键盘效果预览", "进入试用页体验完整键盘", icon = R.drawable.ic_lucide_keyboard) { showPage(Page.TEST) })
             addDivider(this)
-            addView(actionRow("使用指引", "查看键盘与 AI 功能说明") { showPage(Page.USAGE_GUIDE) })
+            addView(actionRow("使用指引", "查看键盘与 AI 功能说明", icon = R.drawable.ic_lucide_book_open) { showPage(Page.USAGE_GUIDE) })
         })
         addView(section("支持"))
         addView(card().apply {
-            addView(actionRow("意见反馈", "反馈渠道正在建设中") {
-                Toast.makeText(this@MainActivity, "反馈渠道正在建设中", Toast.LENGTH_SHORT).show()
+            addView(actionRow("意见反馈", "扫码添加微信，反馈问题与建议", icon = R.drawable.ic_lucide_message_circle_more) {
+                showFeedbackDialog()
             })
             addDivider(this)
-            addView(actionRow("关于我们", "开发者、微信与随缘打赏") { showPage(Page.ABOUT) })
-        })
-        addView(section("版本管理"))
-        addView(card().apply {
-            val row = actionRow("版本管理", versionManagementHint()) { showVersionManagementDialog() }
+            addView(actionRow("关于我们", "开发者、微信与随缘打赏", icon = R.drawable.ic_lucide_house) { showPage(Page.ABOUT) })
+            addDivider(this)
+            val row = actionRow("检查更新", versionManagementHint(), icon = R.drawable.ic_lucide_history) {
+                showVersionManagementDialog()
+            }
             // actionRow renders [title, detail] inside its first child column.
-            versionRowDetail = (row.getChildAt(0) as? LinearLayout)?.getChildAt(1) as? TextView
+            versionRowDetail = (row.getChildAt(1) as? LinearLayout)?.getChildAt(1) as? TextView
             addView(row)
         })
+        addView(View(this@MainActivity).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(12)) })
     }
 
     private fun buildSubscriptionPage(): View = screen {
@@ -1118,8 +1149,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildTestPage(): View = screen {
-        addView(subpageHeader("测试") { showPage(Page.ACCOUNT) })
-        addView(section("测试输入"))
+        addView(subpageHeader("键盘试用") { showPage(Page.ACCOUNT) })
+        addView(section("体验输入"))
+        val inputMethodManager = getSystemService(InputMethodManager::class.java)
+        fun keyboardReady(): Boolean {
+            val enabledHere = inputMethodManager.enabledInputMethodList.any { it.packageName == packageName }
+            if (!enabledHere) {
+                showKeyboardSetupDialog(notEnabled = true)
+                return false
+            }
+            val selected = Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.DEFAULT_INPUT_METHOD
+            ).orEmpty().startsWith(packageName)
+            if (!selected) {
+                showKeyboardSetupDialog(notEnabled = false)
+                return false
+            }
+            return true
+        }
         val input = EditText(this@MainActivity).apply {
             hint = "在这里试试拼音、英文、语音和润色"
             setTextColor(getColor(R.color.weike_text))
@@ -1130,21 +1178,32 @@ class MainActivity : AppCompatActivity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             background = roundedBackground(getColor(R.color.weike_key), 16)
             setPadding(dp(16), dp(14), dp(16), dp(14))
+            // Tap is gated: an un-enabled/unselected IME must not pop a bare
+            // system keyboard (or the system picker) before the guided dialog.
+            // Touch-level interception also covers taps on an already-focused
+            // field, where EditText never fires onClick.
+            showSoftInputOnFocus = false
+            setOnClickListener {
+                if (keyboardReady()) {
+                    requestFocus()
+                    setSelection(text.length)
+                    inputMethodManager.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                } else {
+                    requestFocus()
+                }
+            }
+            setOnTouchListener { view, event ->
+                if (event.actionMasked == android.view.MotionEvent.ACTION_UP && !keyboardReady()) {
+                    view.performClick()
+                    return@setOnTouchListener true
+                }
+                false
+            }
         }
         addView(card().apply {
             addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(190)))
             addView(primaryButton("试用键盘") {
-                val inputMethodManager = getSystemService(InputMethodManager::class.java)
-                val currentInputMethod = Settings.Secure.getString(
-                    contentResolver,
-                    Settings.Secure.DEFAULT_INPUT_METHOD
-                ).orEmpty()
-                if (!currentInputMethod.startsWith(packageName)) {
-                    input.requestFocus()
-                    Toast.makeText(this@MainActivity, "请先选择恋爱键盘，再点击试用", Toast.LENGTH_SHORT).show()
-                    inputMethodManager.showInputMethodPicker()
-                    return@primaryButton
-                }
+                if (!keyboardReady()) return@primaryButton
                 input.requestFocus()
                 input.setSelection(input.text.length)
                 input.post {
@@ -1153,6 +1212,40 @@ class MainActivity : AppCompatActivity() {
             }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 12))
             addView(formActionButton("清空文本", false) { input.text.clear() }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 10))
         })
+    }
+
+    /** Guided setup dialog for the trial page: distinguishes "not enabled in
+     *  system" from "enabled but not currently selected". Dismisses itself in
+     *  onResume once the user has enabled/selected the IME and come back. */
+    private var keyboardSetupDialog: android.app.Dialog? = null
+
+    private fun showKeyboardSetupDialog(notEnabled: Boolean) {
+        keyboardSetupDialog?.dismiss()
+        keyboardSetupDialog = themedDialog(
+            if (notEnabled) "先启用恋爱键盘" else "切换到恋爱键盘",
+            if (notEnabled) "体验 AI 键盘前，需要先在系统中启用"
+            else "当前使用的是其他输入法，切换后即可体验"
+        ) { body, dialog ->
+            body.addView(TextView(this).apply {
+                text = if (notEnabled)
+                    "第 1 步：点击下方按钮，进入系统输入法设置\n第 2 步：打开「恋爱键盘」开关\n第 3 步：返回本页，点击「试用键盘」开始体验"
+                else
+                    "第 1 步：点击下方按钮，弹出输入法选择器\n第 2 步：选择「恋爱键盘」\n第 3 步：返回本页，点击「试用键盘」开始体验"
+                textSize = 13f
+                setLineSpacing(dp(4).toFloat(), 1f)
+                setTextColor(getColor(R.color.weike_text))
+            })
+            body.addView(compactFormActionButton(if (notEnabled) "去启用" else "选择恋爱键盘", true) {
+                dialog.dismiss()
+                if (notEnabled) {
+                    startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                } else {
+                    getSystemService(InputMethodManager::class.java).showInputMethodPicker()
+                }
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
+            body.addView(compactFormActionButton("稍后再说", false) { dialog.dismiss() },
+                margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
+        }.also { it.show() }
     }
 
     private fun buildKeyEffects(): View = screen {
@@ -1476,14 +1569,60 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildCloudConfiguration(): View = screen {
         addView(cloudSubpageHeader("大模型配置") { showPage(cloudReturnPage) })
-        addView(cloudSection("文本模型"))
-        addView(providerConfigurationCard(
+        addView(cloudSection("AI 大模型套餐"))
+        val chevronView = ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_lucide_chevron_down)
+            setColorFilter(getColor(R.color.weike_muted))
+        }
+        // 默认折叠；配置过自定义模型（端点完整）的用户自动展开。
+        val customSectionHeader = cloudSection("自定义文本模型").apply { visibility = View.GONE }
+        val customCard = providerConfigurationCard(
             isAsr = false,
             load = { container.settings.cloudApiSettings.first().text },
             loadProvider = { container.settings.textProvider() },
             save = { config, provider -> container.settings.saveTextApi(config, provider) },
             test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() }
-        ))
+        ).apply { visibility = View.GONE }
+
+        fun applyCustomExpanded(expanded: Boolean) {
+            chevronView.animate().rotation(if (expanded) 180f else 0f).setDuration(150).start()
+            customSectionHeader.visibility = if (expanded) View.VISIBLE else View.GONE
+            customCard.visibility = if (expanded) View.VISIBLE else View.GONE
+        }
+        var customExpanded = false
+
+        addView(card().apply {
+            addView(cloudHelpText("开通后直接使用全部 AI 功能，按每日额度计，无需填写任何接口和密钥。"))
+            addView(compactFormActionButton("查看订阅套餐", true) { showPage(Page.SUBSCRIPTION) },
+                margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(42), top = 12))
+            // Collapsible custom-model entry: one line + chevron, expanding to
+            // the endpoint form below instead of a top-level switch.
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
+                setPadding(0, dp(12), 0, dp(2))
+                addView(TextView(this@MainActivity).apply {
+                    text = "不想订阅？使用自定义模型"
+                    textSize = 13f
+                    setTextColor(pagePrimary)
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(chevronView, LinearLayout.LayoutParams(dp(20), dp(20)))
+                setOnClickListener {
+                    customExpanded = !customExpanded
+                    applyCustomExpanded(customExpanded)
+                }
+            })
+        })
+        addView(customSectionHeader)
+        addView(customCard)
+        lifecycleScope.launch {
+            // 配置过自定义模型（端点完整）的用户进入页面自动展开表单。
+            val configured = container.settings.customTextConfig.first().isComplete()
+            if (configured) {
+                customExpanded = true
+                applyCustomExpanded(true)
+            }
+        }
         addView(cloudSection("帮你回提示词"))
         addView(card().apply {
             addView(cloudHelpText("定义 AI 以谁的角度回复、回复什么内容。该提示词会作为系统提示词发送给文本模型。"))
@@ -1491,11 +1630,12 @@ class MainActivity : AppCompatActivity() {
             addView(promptInput)
             val actions = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-                addView(compactFormActionButton("恢复默认", false) {
+                // Standard 48dp buttons split evenly, matching every other
+                // full-width action on this page instead of tiny inline chips.
+                addView(formActionButton("恢复默认", false) {
                     promptInput.setText(AppSettingsRepository.DEFAULT_REPLY_PROMPT)
-                })
-                addView(compactFormActionButton("保存提示词", true) {
+                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                addView(formActionButton("保存提示词", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveReplyPrompt(promptInput.text.toString()) }
                             .onSuccess {
@@ -1504,7 +1644,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
-                })
+                }, LinearLayout.LayoutParams(0, dp(48), 1f))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12)
             }
             addView(actions)
@@ -1528,11 +1668,10 @@ class MainActivity : AppCompatActivity() {
             }
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-                addView(compactFormActionButton("恢复默认", false) {
+                addView(formActionButton("恢复默认", false) {
                     relationPromptInput.setText(AppSettingsRepository.DEFAULT_RELATION_PROMPTS.getValue(selectedRelation))
-                })
-                addView(compactFormActionButton("保存当前关系", true) {
+                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+                addView(formActionButton("保存当前关系", true) {
                     lifecycleScope.launch {
                         runCatching { container.settings.saveRelationPrompt(selectedRelation, relationPromptInput.text.toString()) }
                             .onSuccess {
@@ -1542,7 +1681,7 @@ class MainActivity : AppCompatActivity() {
                             }
                             .onFailure { Toast.makeText(this@MainActivity, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
-                })
+                }, LinearLayout.LayoutParams(0, dp(48), 1f))
                 layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12)
             })
             lifecycleScope.launch {
@@ -1565,7 +1704,7 @@ class MainActivity : AppCompatActivity() {
         ), margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(120), top = 10))
         addView(settingsHubSection("AI 与数据"))
         addView(managementTileRow(
-            managementTile("大模型配置", "接口、模型与提示词", R.drawable.ic_lucide_cloud) {
+            managementTile("大模型配置", "套餐或自定义接口", R.drawable.ic_lucide_cloud) {
                 cloudReturnPage = Page.SETTINGS
                 showPage(Page.CLOUD)
             },
@@ -1676,6 +1815,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildAbout(): View = screen {
         addView(subpageHeader("关于我们") { showPage(Page.PROFILE) })
+        addView(card().apply {
+            addView(actionRow("版本信息", "当前版本 $appVersionName（${localVersionCode() % 1000}）") {
+                showVersionManagementDialog()
+            })
+            addDivider(this)
+            addView(actionRow("隐私政策", "数据如何采集与保存") { showPrivacyPolicyDialog() })
+        })
         addView(section("开发者与交流"))
         addView(card().apply {
             addView(TextView(this@MainActivity).apply {
@@ -1706,12 +1852,32 @@ class MainActivity : AppCompatActivity() {
                 setLineSpacing(dp(4).toFloat(), 1f)
                 setTextColor(getColor(R.color.weike_text))
             })
+            addView(TextView(this@MainActivity).apply {
+                text = "微信收款码"
+                textSize = 12f
+                setTextColor(getColor(R.color.weike_muted))
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
+            })
             addView(aboutImage(R.drawable.donation_wechat_qr, "微信支付打赏二维码"), margins(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 top = 16
             ))
         })
+        addView(View(this@MainActivity).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(12)) })
+    }
+
+    private fun showPrivacyPolicyDialog() {
+        themedDialog("隐私政策", "恋爱键盘如何处理你的数据") { body, _ ->
+            body.addView(ScrollView(this).apply {
+                addView(TextView(this@MainActivity).apply {
+                    text = PRIVACY_POLICY_TEXT
+                    textSize = 13f
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                    setTextColor(getColor(R.color.weike_text))
+                })
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(320)))
+        }.show()
     }
 
     private fun aboutImage(drawable: Int, description: String) = ImageView(this).apply {
@@ -1722,10 +1888,14 @@ class MainActivity : AppCompatActivity() {
         background = roundedBackground(getColor(R.color.weike_panel), 16)
     }
 
+    /** Update manifests carry internal build channels ("1.5.4-cdn"); users
+     *  should only ever see the plain version number. */
+    private fun displayVersionName(raw: String): String = raw.substringBefore('-').trim()
+
     private fun versionManagementHint(): String {
         val newer = pendingUpdate?.versionName
             ?: getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE).getString(KEY_PENDING_VERSION, null)
-        return newer?.let { "有新版本 $it，点击查看" } ?: "当前版本 $appVersionName"
+        return newer?.let { "新版本 ${displayVersionName(it)} 已发布，点击查看" } ?: "当前版本 $appVersionName"
     }
 
     private fun refreshVersionRowHint() {
@@ -1930,13 +2100,169 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** Feedback entry: the WeChat QR code is the live channel; scanning it
+     *  reaches the developer directly. */
+    private fun showFeedbackDialog() {
+        val dialog = android.app.Dialog(this)
+        val radius = dp(22).toFloat()
+        fun headerDrawable() = GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
+        ).apply { cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f) }
+
+        val titleView = TextView(this).apply {
+            text = "意见反馈"
+            textSize = 17f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }
+        val subtitleView = TextView(this).apply {
+            text = "扫码添加微信，直接反馈问题和建议"
+            textSize = 12f
+            setTextColor(Color.argb(225, 255, 255, 255))
+        }
+        val closeButton = ImageView(this).apply {
+            setImageResource(R.drawable.ic_lucide_x)
+            setColorFilter(Color.WHITE)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            contentDescription = "关闭"
+        }
+        val header = android.widget.FrameLayout(this).apply {
+            background = headerDrawable()
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(titleView)
+                addView(subtitleView)
+            })
+            addView(
+                closeButton,
+                android.widget.FrameLayout.LayoutParams(dp(38), dp(38), Gravity.TOP or Gravity.END).apply {
+                    topMargin = dp(10)
+                    marginEnd = dp(10)
+                }
+            )
+        }
+        val qr = ImageView(this).apply {
+            setImageResource(R.drawable.developer_wechat_qr)
+            contentDescription = "开发者微信二维码"
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, radius, radius, radius, radius)
+            }
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            addView(qr, LinearLayout.LayoutParams(dp(210), dp(210)).apply { gravity = Gravity.CENTER_HORIZONTAL })
+            addView(TextView(this@MainActivity).apply {
+                text = "扫一扫上方二维码，添加开发者微信\n使用体验、问题和建议都欢迎"
+                gravity = Gravity.CENTER
+                textSize = 12f
+                setTextColor(getColor(R.color.weike_muted))
+                setPadding(0, dp(12), 0, dp(4))
+            })
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(body)
+        }
+
+        closeButton.setOnClickListener { dialog.dismiss() }
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setContentView(android.widget.FrameLayout(this).apply {
+            setPadding(dp(26), 0, dp(26), 0)
+            addView(card, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        })
+        dialog.window?.apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.show()
+    }
+
+    /** Branded dialog shell (gradient header + white body) shared by
+     *  login/feedback/update so system AlertDialogs stop breaking the theme. */
+    private fun themedDialog(title: String, subtitle: String? = null, buildBody: (LinearLayout, android.app.Dialog) -> Unit): android.app.Dialog {
+        val dialog = android.app.Dialog(this)
+        val radius = dp(22).toFloat()
+        val header = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
+            ).apply { cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f) }
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                })
+                subtitle?.let {
+                    addView(TextView(this@MainActivity).apply {
+                        text = it
+                        textSize = 12f
+                        setTextColor(Color.argb(225, 255, 255, 255))
+                    })
+                }
+            })
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_lucide_x)
+                setColorFilter(Color.WHITE)
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                contentDescription = "关闭"
+            }, android.widget.FrameLayout.LayoutParams(dp(38), dp(38), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(10)
+                marginEnd = dp(10)
+            })
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, radius, radius, radius, radius)
+            }
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+        }
+        header.getChildAt(1).setOnClickListener { dialog.dismiss() }
+        buildBody(body, dialog)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(body)
+        }
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setContentView(android.widget.FrameLayout(this).apply {
+            setPadding(dp(26), 0, dp(26), 0)
+            addView(card, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        })
+        dialog.window?.apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        return dialog
+    }
+
     private fun confirmLogout() {
-        AlertDialog.Builder(this)
-            .setTitle("退出登录？")
-            .setMessage("本机登录状态将被清除；订阅权益不受影响，下次购买前重新登录即可。")
-            .setPositiveButton("退出") { _, _ -> performLogout() }
-            .setNegativeButton("取消", null)
-            .show()
+        themedDialog("退出登录？", "本机登录状态将被清除") { body, dialog ->
+            body.addView(TextView(this).apply {
+                text = "订阅权益不受影响，下次购买前重新登录即可。"
+                textSize = 13f
+                setLineSpacing(dp(3).toFloat(), 1f)
+                setTextColor(getColor(R.color.weike_text))
+            })
+            body.addView(compactFormActionButton("退出登录", true) {
+                dialog.dismiss()
+                performLogout()
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
+            body.addView(compactFormActionButton("取消", false) { dialog.dismiss() },
+                margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
+        }.show()
     }
 
     private fun performLogout() {
@@ -1954,7 +2280,6 @@ class MainActivity : AppCompatActivity() {
     private fun showVersionManagementDialog() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(2), dp(20), 0)
         }
         val status = TextView(this).apply {
             textSize = 13f
@@ -1976,9 +2301,12 @@ class MainActivity : AppCompatActivity() {
         var downloadedFile: File? = null
 
         fun renderUpdate(update: UpdateClient.UpdateInfo) {
-            status.text = "当前版本：$appVersionName\n发现新版本：${update.versionName}"
-            if (update.notes.isNotBlank()) {
-                notes.text = update.notes.take(600)
+            status.text = "当前版本：$appVersionName\n发现新版本：${displayVersionName(update.versionName)}"
+            val userNotes = update.notes.lineSequence()
+                .filterNot { it.contains("CDN", true) || it.contains("分发") || it.contains("验证版本") }
+                .joinToString("\n").trim()
+            if (userNotes.isNotBlank()) {
+                notes.text = userNotes.take(600)
                 notes.visibility = View.VISIBLE
             }
         }
@@ -2081,15 +2409,61 @@ class MainActivity : AppCompatActivity() {
         content.addView(notes, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 12))
         content.addView(progress, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(8), bottom = 12))
         content.addView(primary, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
-        AlertDialog.Builder(this)
-            .setTitle("版本管理")
-            .setView(content)
-            .setNegativeButton("关闭", null)
-            .show()
+        // Themed shell matching the login dialog instead of the system
+        // AlertDialog, whose default styling clashed with the pink theme.
+        val dialog = android.app.Dialog(this)
+        val radius = dp(22).toFloat()
+        val header = android.widget.FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(255, 107, 157), Color.rgb(255, 160, 122))
+            ).apply { cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f) }
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            addView(TextView(this@MainActivity).apply {
+                text = "软件更新"
+                textSize = 17f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+            })
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_lucide_x)
+                setColorFilter(Color.WHITE)
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                contentDescription = "关闭"
+            }, android.widget.FrameLayout.LayoutParams(dp(38), dp(38), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(10)
+                marginEnd = dp(10)
+            })
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, radius, radius, radius, radius)
+                }
+                setPadding(dp(20), dp(18), dp(20), dp(18))
+                addView(content)
+            })
+        }
+        header.getChildAt(1).setOnClickListener { dialog.dismiss() }
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setContentView(android.widget.FrameLayout(this).apply {
+            setPadding(dp(26), 0, dp(26), 0)
+            addView(card, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        })
+        dialog.window?.apply {
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        dialog.show()
     }
 
     private fun buildUsageGuide(): View = screen {
-        addView(subpageHeader("使用指引") { showPage(Page.ABOUT) })
+        addView(subpageHeader("使用指引") { showPage(Page.PROFILE) })
         addView(section("语音与文本"))
         addView(card().apply {
             addView(usageGuideItem(
@@ -2115,7 +2489,13 @@ class MainActivity : AppCompatActivity() {
             addView(usageGuideItem(
                 R.drawable.ic_lucide_sliders_horizontal,
                 "快速输入标点",
-                "在“定制输入法”开启句号逗号快捷键后，空格左侧的按键点击输入逗号，上滑或长按输入句号。"
+                "在“设置 → 标点与英文”开启句号逗号快捷键后，空格左侧的按键点击输入逗号，上滑或长按输入句号；九宫格的「，。？!」键展开标点条，选择其他标点时自动替换预插的逗号。"
+            ))
+            addDivider(this)
+            addView(usageGuideItem(
+                R.drawable.ic_lucide_keyboard,
+                "颜文字与符号",
+                "九宫格右侧的“^_^”键弹出颜文字条，点选即上屏；符号键盘共三页，第三页收录【】《》等中文符号，翻页键循环切换。"
             ))
             addDivider(this)
             addView(usageGuideItem(
@@ -2219,7 +2599,14 @@ class MainActivity : AppCompatActivity() {
                 CloudProvider.CUSTOM
             )
         } else {
-            CloudProvider.entries.toList()
+            // 文本场景收敛到主流五家，降低选择成本。
+            listOf(
+                CloudProvider.ZHIPU,
+                CloudProvider.QWEN,
+                CloudProvider.DEEPSEEK,
+                CloudProvider.DOUBAO,
+                CloudProvider.HUNYUAN
+            )
         }
         val picker = CloudProviderDropdown(this@MainActivity, selectedProvider, availableProviders) { provider ->
             applyProvider(provider, replaceWithPreset = true)
@@ -2286,8 +2673,19 @@ class MainActivity : AppCompatActivity() {
         addView(protocolHint)
         addView(url)
         addView(apiKey)
-        addView(model)
-        addView(readModelsButton, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), bottom = 8))
+        // 读取模型嵌入「模型名」输入框右侧（验证码按钮样式），不再单独占一行。
+        val modelHost = android.widget.FrameLayout(this@MainActivity).apply {
+            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 8)
+            model.setPadding(dp(11), 0, dp(96), 0)
+            addView(model, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.CENTER_VERTICAL
+            ))
+            addView(readModelsButton, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL
+            ).apply { marginEnd = dp(8) })
+        }
+        addView(modelHost)
         addView(LinearLayout(this@MainActivity).apply {
             addView(testButton, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
             addView(saveButton, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -2424,12 +2822,13 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun showAddDictionaryDialog() {
+    private fun showAddDictionaryDialog(defaultType: Int = 0) {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(8), dp(24), 0)
         }
         val type = settingsSpinner(listOf("专业词库", "打字词典"))
+        type.setSelection(defaultType)
         val word = field("单词或词语")
         val hint = field("拼音或备注（可选）")
         body.addView(type)
@@ -2522,6 +2921,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderLexicon(entries: List<LexiconTerm>) {
         val host = lexiconList ?: return
         host.removeAllViews()
+        if (entries.isEmpty()) host.addView(illustratedOptionCard("尚未添加自定义专业词", operationGuide("用于人名、公司名和行业术语，辅助拼音候选及 AI 润色", "这里只显示你添加的词条，内置离线词典不在此列出")) { addView(primaryButton("添加专业词") { showAddDictionaryDialog() }) })
         entries.forEach { entry -> host.addView(itemCard("${entry.term}${if (entry.hint.isBlank()) "" else " · ${entry.hint}"}") {
             lifecycleScope.launch { container.lexicon.delete(entry.term) }
         }) }
@@ -2530,6 +2930,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderTypingDictionary(entries: List<TypingDictionaryEntry>) {
         val host = typingDictionaryList ?: return
         host.removeAllViews()
+        if (entries.isEmpty()) host.addView(illustratedOptionCard("尚未添加自定义打字词", operationGuide("用于常用词、短语及英文词，辅助输入候选", "保存自己的常用表达，无需下载基础词典")) { addView(primaryButton("添加打字词") { showAddDictionaryDialog(1) }) })
         entries.forEach { entry -> host.addView(itemCard("${entry.term}${if (entry.hint.isBlank()) "" else " · ${entry.hint}"}") {
             lifecycleScope.launch { container.typingDictionary.delete(entry.term) }
         }) }
@@ -2667,28 +3068,32 @@ class MainActivity : AppCompatActivity() {
                 else -> true
             }
         }
-        symbols.forEach { symbol ->
-            host.addView(card(top = 5).apply {
-                val row = LinearLayout(this@MainActivity).apply { gravity = Gravity.CENTER_VERTICAL }
-                row.addView(TextView(this@MainActivity).apply {
+        symbols.forEachIndexed { index, symbol ->
+            // Compact 48dp row instead of a full card per symbol; drag index
+            // math below walks host children, so rows stay direct children.
+            host.addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = roundedBackground(getColor(R.color.weike_panel), 14)
+                setPadding(dp(12), 0, dp(6), 0)
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = if (index == 0) 0 else 4)
+                addView(TextView(this@MainActivity).apply {
                     text = symbol
                     textSize = 14f
                     gravity = Gravity.CENTER_VERTICAL
                     setTextColor(getColor(R.color.weike_text))
                     setOnClickListener { showNineKeySymbolEditor(symbol) }
-                }, LinearLayout.LayoutParams(0, dp(50), 1f))
-                row.addView(ImageView(this@MainActivity).apply {
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+                addView(ImageView(this@MainActivity).apply {
                     setImageResource(R.drawable.ic_lucide_grip_vertical)
                     setColorFilter(getColor(R.color.weike_muted))
                     setPadding(dp(10), dp(10), dp(10), dp(10))
                     setOnLongClickListener {
                         dragSource = this
-                        animate().alpha(0.55f).scaleX(0.92f).scaleY(0.92f).setDuration(120).start()
+                        animate().alpha(0.55f).scaleX(0.92f).scaleY(0.92f)?.setDuration(120)?.start()
                         startDragAndDrop(ClipData.newPlainText("nine_key_symbol", symbol), View.DragShadowBuilder(this), symbol, 0)
                         true
                     }
-                }, LinearLayout.LayoutParams(dp(44), dp(50)))
-                addView(row)
+                }, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
             })
         }
         host.addView(primaryButton("添加符号") { showNineKeySymbolEditor() })
@@ -2830,7 +3235,9 @@ class MainActivity : AppCompatActivity() {
         header.addView(ImageView(this@MainActivity).apply {
             setImageResource(icon)
             setColorFilter(if (darkTheme) Color.WHITE else pagePrimary)
-            background = roundedBackground(if (darkTheme) Color.argb(36, 255, 255, 255) else Color.argb(34, 255, 107, 157), 10)
+            // Circular badge to match the Profile rows and home cards; every
+            // icon container in the app shares one shape language.
+            background = circleBackground(if (darkTheme) Color.argb(36, 255, 255, 255) else Color.argb(34, 255, 107, 157))
             setPadding(dp(7), dp(7), dp(7), dp(7))
         }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.START or Gravity.TOP))
         header.addView(ImageView(this@MainActivity).apply {
@@ -2910,12 +3317,17 @@ class MainActivity : AppCompatActivity() {
         val manager = DictionaryPackManager(this)
         val installed = manager.hasEnhancedDictionary()
         val state = TextView(this).apply {
-            text = if (installed) "已启用" else "未下载"
+            text = if (installed) "已启用 · 内置增强词典，离线可用" else "未启用"
             textSize = 14f
             setTextColor(getColor(if (installed) R.color.weike_text else R.color.weike_muted))
         }
         val progress = downloadProgressView()
         val action = primaryButton(if (installed) "已启用" else "下载并启用") {}
+        if (installed) {
+            // The bundle ships inside the APK; a permanently disabled button
+            // only invites "re-download" questions, so hide it entirely.
+            action.visibility = View.GONE
+        }
         action.isEnabled = !installed
         action.alpha = if (installed) 0.62f else 1f
         action.setOnClickListener {
@@ -2940,11 +3352,11 @@ class MainActivity : AppCompatActivity() {
         }
         return illustratedOptionCard(
             "增强词典",
-            operationGuide("扩展词汇、腾讯词汇、英文混输与 Emoji", "25 MB，下载后立即切换，不在本机编译")
+            operationGuide("扩展词汇、腾讯词汇、英文混输与 Emoji", "随安装包内置，首次使用自动启用，无需联网下载")
         ) {
             addView(state, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 8))
             addView(progress)
-            addView(action)
+            if (!installed) addView(action)
         }
     }
 
@@ -3188,9 +3600,20 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
 
-    private fun actionRow(title: String, detail: String, destructive: Boolean = false, action: () -> Unit) = LinearLayout(this).apply {
+    private fun actionRow(title: String, detail: String, destructive: Boolean = false, icon: Int? = null, action: () -> Unit) = LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(0, dp(6), 0, dp(6))
+        if (icon != null) {
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(icon)
+                setColorFilter(pagePrimary)
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(26, 255, 107, 157))
+                }
+            }, LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginEnd = dp(12) })
+        }
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
@@ -3365,10 +3788,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private companion object {
+    companion object {
         const val UPDATE_PREFERENCES = "update_check"
+        const val EXTRA_OPEN_PAGE = "open_page"
         const val KEY_LAST_CHECK_AT = "last_check_at"
         const val KEY_PENDING_VERSION = "pending_version"
         const val UPDATE_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
+        const val PRIVACY_POLICY_TEXT = "恋爱键盘默认不收集遥测或崩溃分析数据。\n\n" +
+            "· 录音只在内存中存在，结束后会发送到用户配置的 MiMo ASR 服务；应用不保存录音文件。\n" +
+            "· 听写、润色和问答历史默认不保存。用户开启历史后，内容只保存在设备本地，并可随时删除。\n" +
+            "· 剪贴板历史默认关闭。开启后最多保留 20 条 24 小时内的非敏感、非超长文本，可一键清空。\n" +
+            "· 云端接口密钥保存在 Android Keystore 加密保护的本地存储中，不写入日志或网络请求正文。\n" +
+            "· 文本模型支持 OpenAI Chat Completions 兼容接口；ASR 仅保证 MiMo 官方兼容格式。用户应仅配置自己信任的服务商。"
     }
 }

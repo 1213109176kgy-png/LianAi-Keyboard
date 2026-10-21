@@ -55,6 +55,7 @@ class AppSettingsRepository(private val context: Context) {
     private val textModelKey = stringPreferencesKey("text_api_model")
     private val asrProviderKey = stringPreferencesKey("asr_provider")
     private val textProviderKey = stringPreferencesKey("text_provider")
+    private val useCustomTextModelKey = booleanPreferencesKey("use_custom_text_model")
     private val replyPromptKey = stringPreferencesKey("reply_prompt")
     private val relationPromptsKey = stringPreferencesKey("relation_prompts")
     private val clipboardHistoryEnabledKey = booleanPreferencesKey("clipboard_history_enabled")
@@ -139,6 +140,32 @@ class AppSettingsRepository(private val context: Context) {
             lightPath = prefs[keyboardLogoLightPathKey].orEmpty()
         )
     }
+    /** Custom-endpoint switch for text AI. Defaults to true only when a
+     *  complete text endpoint already exists, so existing users keep working;
+     *  fresh users land on the plan path with the switch off. */
+    val useCustomTextModel = context.settingsDataStore.data.map { prefs ->
+        prefs[useCustomTextModelKey] ?: !prefs[textUrlKey].isNullOrBlank()
+    }
+
+    suspend fun saveUseCustomTextModel(enabled: Boolean) {
+        context.settingsDataStore.edit { prefs -> prefs[useCustomTextModelKey] = enabled }
+    }
+
+    /** Raw custom text endpoint, independent of the enable switch — the
+     *  failover strategy must be able to try it even when the switch is off. */
+    val customTextConfig = flow {
+        migrateCloudSecrets()
+        emitAll(context.settingsDataStore.data.map { prefs ->
+            ModelEndpointConfig(
+                prefs[textUrlKey].orEmpty(),
+                secrets.read(SECURE_TEXT_KEY).orEmpty(),
+                prefs[textModelKey].orEmpty(),
+                runCatching { CloudProvider.valueOf(prefs[textProviderKey].orEmpty()) }
+                    .getOrDefault(CloudProvider.CUSTOM)
+            )
+        })
+    }
+
     val cloudApiSettings = flow {
         migrateCloudSecrets()
         emitAll(context.settingsDataStore.data.map { prefs ->
@@ -150,6 +177,8 @@ class AppSettingsRepository(private val context: Context) {
                     runCatching { CloudProvider.valueOf(prefs[asrProviderKey].orEmpty()) }
                         .getOrDefault(CloudProvider.CUSTOM)
                 ),
+                // Channel selection lives in the IME's failover strategy; a
+                // configured endpoint is simply "available" here.
                 text = ModelEndpointConfig(
                     prefs[textUrlKey].orEmpty(),
                     secrets.read(SECURE_TEXT_KEY).orEmpty(),

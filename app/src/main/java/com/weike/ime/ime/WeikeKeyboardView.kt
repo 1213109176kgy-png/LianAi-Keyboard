@@ -67,15 +67,26 @@ interface KeyboardActions {
     fun setPolishRelation(relation: String)
     fun setPolishCursor(index: Int)
     fun clearComposition()
+    /** Clears next-word predictions from the candidate bar. */
+    fun dismissPredictions()
+    /** Hides the AI setup guide card without opening settings. */
+    fun dismissAiGuide()
+    /** Opens the subscription page ("SUBSCRIPTION") or model config ("CLOUD"). */
+    fun openAiSetup(page: String)
     fun deleteClipboard(entry: ClipboardEntry)
     fun undoLastInsert()
     fun typeEnglish(value: String)
     fun typeEnglishLetter(value: String)
     fun typePinyin(value: String)
     fun chooseCandidate(candidate: PinyinCandidate)
+    fun choosePinyinSpelling(spelling: String)
     fun chooseEnglishCandidate(value: String)
     fun choosePrediction(candidate: PredictionCandidate)
     fun commitEnglishComposition(addSpace: Boolean)
+    /** Nine-key "，。?!" key: commits the leading comma and opens the strip. */
+    fun punctuationKeyTapped()
+    /** Strip pick: replaces the auto-inserted comma when one is pending. */
+    fun choosePunctuation(symbol: String)
     fun pressTextSpace(pinyin: Boolean)
     fun backspace()
     fun moveCursorBy(delta: Int)
@@ -102,6 +113,13 @@ class WeikeKeyboardView(
     private var voiceState: VoiceUiState = VoiceUiState.Idle
     private var pinyinBuffer = ""
     private var pinyinCandidates: List<PinyinCandidate> = emptyList()
+    private var spellingOptions: List<String> = emptyList()
+    private var selectedSpelling = ""
+    private var spellingScroll = 0f
+    private var spellingMaxScroll = 0f
+    private var spellingTouch = false
+    private var spellingDownX = 0f
+    private var spellingStartScroll = 0f
     private var englishBuffer = ""
     private var englishCandidates: List<PinyinCandidate> = emptyList()
     private var predictionCandidates: List<PredictionCandidate> = emptyList()
@@ -248,6 +266,10 @@ class WeikeKeyboardView(
     private var enterLabel = "发送"
     private var candidateExpanded = false
     private var emojiPanel = false
+    private var kaomojiStripVisible = false
+
+    /** Kaomoji quick bar shown by the nine-key "^_^" key, iOS style. */
+    private val kaomoji = listOf("^_^", "^o^", "^3^", ">_<", "T_T", "QAQ", "Orz", "♪", "♡")
     private var punctuationStripVisible = false
     /** Active emoji category index and page inside the emoji panel. */
     private var emojiCategory = 0
@@ -263,6 +285,9 @@ class WeikeKeyboardView(
     private var polishLoading = false
     private var replyOptions: List<String> = emptyList()
     private var replyLoading = false
+    // "reply"/"polish": the matching AI path failed and the user should be
+    // pointed at subscription/model setup instead of fabricated content.
+    private var aiGuide: String? = null
     private var replyEmotion = ""
     private val polishRelations = listOf("通用", "心动对象", "恋人", "朋友", "客户", "上司", "同事", "家人")
     private val quickPasteMotionDurationMs = 5_000L
@@ -296,7 +321,7 @@ class WeikeKeyboardView(
     }
     private val background: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(48, 38, 43) else Color.rgb(255, 249, 250)
     private val key: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(78, 62, 69) else Color.WHITE
-    private val specialKey: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(105, 82, 91) else Color.rgb(173, 176, 189)
+    private val specialKey: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(105, 82, 91) else Color.rgb(208, 194, 202)
     private val pressedKey: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(255, 107, 157) else Color.rgb(255, 232, 238)
     private val tabBackground: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(58, 46, 51) else Color.argb(190, 255, 255, 255)
     private val white: Int get() = if (keyboardTheme == KeyboardTheme.DARK) Color.rgb(255, 249, 250) else Color.rgb(45, 52, 54)
@@ -317,6 +342,18 @@ class WeikeKeyboardView(
     init {
         isClickable = true
         contentDescription = "恋爱键盘"
+    }
+
+    /** A freshly focused editor must never reopen onto the emoji grid or a
+     *  stale strip; typing straight into the leftover emoji panel commits a
+     *  row of hearts instead of letters. */
+    fun resetTransientPanels() {
+        emojiPanel = false
+        punctuationStripVisible = false
+        kaomojiStripVisible = false
+        candidateExpanded = false
+        spellingScroll = 0f
+        invalidate()
     }
 
     fun update(
@@ -360,8 +397,16 @@ class WeikeKeyboardView(
         replyEmotion: String = this.replyEmotion,
         enterLabel: String = this.enterLabel,
         dictationActive: Boolean = this.dictationActive,
-        screenshotReplyEnabled: Boolean = this.screenshotReplyEnabled
+        screenshotReplyEnabled: Boolean = this.screenshotReplyEnabled,
+        spellingOptions: List<String> = this.spellingOptions,
+        selectedSpelling: String = this.selectedSpelling,
+        aiGuide: String? = this.aiGuide
     ) {
+        val oldSpellingVisible = showSpellingRow()
+        if (this.spellingOptions != spellingOptions) spellingScroll = 0f
+        this.spellingOptions = spellingOptions
+        this.selectedSpelling = selectedSpelling
+        this.aiGuide = aiGuide
         this.dictationActive = dictationActive
         this.screenshotReplyEnabled = screenshotReplyEnabled
         val normalizedModes = modeOptions.distinct().filter { it != KeyboardMode.SYMBOLS }
@@ -403,6 +448,7 @@ class WeikeKeyboardView(
             answerMaxScroll = 0f
         }
         this.pinyinBuffer = pinyinBuffer
+        if (oldSpellingVisible != showSpellingRow()) requestLayout()
         this.pinyinCandidates = pinyinCandidates
         this.englishBuffer = englishBuffer
         this.englishCandidates = englishCandidates
@@ -557,10 +603,12 @@ class WeikeKeyboardView(
                 val screenH = resources.configuration.screenHeightDp.coerceAtLeast(320)
                 dp((screenH * 0.78f).toInt().coerceIn(260, 340))
             }
-            mode == KeyboardMode.VOICE || mode == KeyboardMode.ASK -> dp(500)
+            // Keep the same key area as the first tab; the draft and relation card adds height above it.
+            mode == KeyboardMode.VOICE -> dp(368) + dp(240) - (if (!pinyinReady) dp(70) else dp(62))
+            mode == KeyboardMode.ASK -> dp(500)
             else -> dp(368)
         }
-        val desired = (base + dp(keyboardHeightLevel * 18) + dp(keyboardBottomOffsetLevel * 8)).toInt()
+        val desired = (base + keyboardInputExtraHeight() + dp(keyboardHeightLevel * 18) + dp(keyboardBottomOffsetLevel * 8)).toInt()
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(desired, heightMeasureSpec))
     }
 
@@ -590,29 +638,32 @@ class WeikeKeyboardView(
         if (punctuationStripVisible) {
             modeTabs = null
             drawPunctuationStrip(canvas)
-        } else if (hasComposition()) {
+        } else if (kaomojiStripVisible) {
+            modeTabs = null
+            drawKaomojiStrip(canvas)
+        } else if (!emojiPanel && mode != KeyboardMode.VOICE && hasComposition() && hasCompositionCandidates()) {
             // Candidate mode replaces the header. Never leave the previous
             // header's mode-selector hit box active over candidate items.
             modeTabs = null
             if (mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) {
                 // Candidate calculation is asynchronous. An empty result for a
                 // frame is normal and must not flash an internal loading state.
-                candidates(canvas, pinyinCandidates, "", actions::chooseCandidate)
+                candidates(canvas, pinyinCandidates, "", onPick = actions::chooseCandidate)
             } else {
-                candidates(canvas, englishCandidates, "", { actions.chooseEnglishCandidate(it.text) })
+                candidates(canvas, englishCandidates, "", onPick = { actions.chooseEnglishCandidate(it.text) })
             }
-        } else if (hasPredictions()) {
+        } else if (!emojiPanel && !hasComposition() && hasPredictions()) {
             modeTabs = null
             candidates(
                 canvas,
                 predictionCandidates.map { PinyinCandidate(it.text, it.score) },
                 "",
-                { visible -> predictionCandidates.firstOrNull { it.text == visible.text }?.let(actions::choosePrediction) }
-            )
+                dismissible = true
+            ) { visible -> predictionCandidates.firstOrNull { it.text == visible.text }?.let(actions::choosePrediction) }
         } else {
             drawHeader(canvas)
         }
-        if (candidateExpanded && hasComposition()) {
+        if (candidateExpanded && hasComposition() && hasCompositionCandidates()) {
             drawExpandedCandidates(canvas)
             return
         }
@@ -821,6 +872,10 @@ class WeikeKeyboardView(
         val answer = (state as? VoiceUiState.Preview)?.takeIf { mode == KeyboardMode.ASK }
         if (answer != null) {
             drawAnswer(canvas, answer.question, answer.text, answer.streaming)
+            return
+        }
+        if (mode == KeyboardMode.ASK && aiGuide?.startsWith("reply") == true && !replyLoading) {
+            drawAiGuideCard(canvas)
             return
         }
         if (mode == KeyboardMode.ASK && (state == VoiceUiState.Idle || state is VoiceUiState.Error)) {
@@ -1131,14 +1186,14 @@ class WeikeKeyboardView(
 
     private fun drawKeyboard(canvas: Canvas, pinyin: Boolean) {
         if (pinyin && pinyinNineKey) {
-            drawNineKeyKeyboard(canvas, if (!pinyinReady) dp(70) else dp(62))
+            drawNineKeyKeyboard(canvas, standardKeyboardTop())
             return
         }
         if (!pinyin) {
             drawEnglishKeyboard(canvas, dp(62))
             return
         }
-        val top = if (pinyin && !pinyinReady) dp(70) else dp(62)
+        val top = standardKeyboardTop()
         val gap = dp(6)
         val keyHeight = (contentBottom() - top - dp(8) - keyboardBottomReserve() - gap * 4) / 5f
         val edge = dp(5)
@@ -1213,6 +1268,99 @@ class WeikeKeyboardView(
         }
     }
 
+    /** AI 失败引导卡：aiGuide 形如 "reply:none"/"polish:sub_expired"。
+     *  variant 由服务端通道策略给出，文案与按钮按真实失败原因区分。 */
+    private fun drawAiGuideCard(canvas: Canvas) {
+        val mode = aiGuide.orEmpty().substringBefore(':')
+        val variant = aiGuide.orEmpty().substringAfter(':', "none")
+        val card = RectF(dp(5), dp(56), width - dp(5), contentBottom() - dp(10))
+        rounded(canvas, card, dp(16), cardBg)
+
+        val (title, line1, line2, buttons) = when (variant) {
+            "sub_expired" -> Triple4(
+                "订阅套餐已失效",
+                "续订套餐，或配置自定义模型继续使用",
+                "配置自定义模型后可自动切换使用",
+                listOf(
+                    AiGuideButton("去续订", { actions.openAiSetup("SUBSCRIPTION") }, true),
+                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, false)
+                )
+            )
+            "custom_down" -> Triple4(
+                "自定义模型无法连通",
+                "请检查接口地址、密钥与账户余额",
+                "也可开通订阅套餐，由官方通道供能",
+                listOf(
+                    AiGuideButton("检查配置", { actions.openAiSetup("CLOUD") }, true),
+                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
+                )
+            )
+            "sub_quota" -> Triple4(
+                "订阅套餐额度已用完",
+                "已自动尝试自定义模型通道也未成功",
+                "请续订套餐，或检查自定义模型配置",
+                listOf(
+                    AiGuideButton("去续订", { actions.openAiSetup("SUBSCRIPTION") }, true),
+                    AiGuideButton("检查配置", { actions.openAiSetup("CLOUD") }, false)
+                )
+            )
+            "sub_pending" -> if (mode == "reply") Triple4(
+                "文本 AI 订阅通道即将开放",
+                "截图识别回复已含在你的套餐内，可直接使用",
+                "也可配置自己的模型接口，费用走你的密钥",
+                listOf(
+                    AiGuideButton("截图识别回复", { actions.screenshotReply() }, true),
+                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, false)
+                )
+            ) else Triple4(
+                "文本优化订阅通道即将开放",
+                "配置自己的模型接口后即可立即使用",
+                "购买套餐后此功能也会自动可用",
+                listOf(
+                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, true),
+                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
+                )
+            )
+            else -> Triple4(
+                "AI 功能还未开通",
+                "开通订阅套餐，或配置自己的模型接口",
+                "两种方式二选一，语音识别已内置无需配置",
+                listOf(
+                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, true),
+                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, false)
+                )
+            )
+        }
+
+        lucide(canvas, R.drawable.ic_lucide_wand_sparkles, width / 2f, card.top + dp(52), dp(30), accent)
+        label(canvas, title, width / 2f, card.top + dp(102), 16f, white, Paint.Align.CENTER, true)
+        label(canvas, line1, width / 2f, card.top + dp(130), 12f, muted, Paint.Align.CENTER)
+        label(canvas, line2, width / 2f, card.top + dp(150), 12f, muted, Paint.Align.CENTER)
+        val gap = dp(10)
+        val buttonWidth = (card.width() - dp(32) - gap) / 2f
+        val buttonTop = card.top + dp(178)
+        buttons.forEachIndexed { index, spec ->
+            val left = card.left + dp(16) + index * (buttonWidth + gap)
+            val box = RectF(left, buttonTop, left + buttonWidth, buttonTop + dp(44))
+            if (spec.filled) {
+                rounded(canvas, box, dp(12), accent)
+                label(canvas, spec.label, box.centerX(), box.centerY() + dp(5), 14f, Color.WHITE, Paint.Align.CENTER, true)
+            } else {
+                rounded(canvas, box, dp(12), cardOptionBg)
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = dp(1); paint.color = cardStroke
+                canvas.drawRoundRect(box, dp(12), dp(12), paint); paint.style = Paint.Style.FILL
+                label(canvas, spec.label, box.centerX(), box.centerY() + dp(5), 14f, accent, Paint.Align.CENTER, true)
+            }
+            target(box, hapticFeedback = HapticFeedbackConstants.CONFIRM) { spec.action() }
+        }
+        val close = RectF(card.right - dp(43), card.top + dp(8), card.right - dp(9), card.top + dp(42))
+        label(canvas, "×", close.centerX(), close.centerY() + dp(6), 23f, muted, Paint.Align.CENTER)
+        target(close) { actions.dismissAiGuide() }
+    }
+
+    private data class AiGuideButton(val label: String, val action: () -> Unit, val filled: Boolean)
+    private data class Triple4(val title: String, val line1: String, val line2: String, val buttons: List<AiGuideButton>)
+
     private fun drawPolishPrompt(canvas: Canvas, error: String?) {
         if (polishLoading) {
             val card = RectF(dp(5), dp(56), width - dp(5), contentBottom() - dp(10))
@@ -1221,6 +1369,10 @@ class WeikeKeyboardView(
             label(canvas, "✨", width / 2f, card.top + dp(126), 34f, Color.WHITE, Paint.Align.CENTER, true)
             label(canvas, "AI正在优化...", width / 2f, card.top + dp(215), 18f, accent, Paint.Align.CENTER, true)
             label(canvas, "正在连接大模型，请稍候", width / 2f, card.top + dp(245), 13f, Color.rgb(255, 151, 126), Paint.Align.CENTER)
+            return
+        }
+        if (aiGuide?.startsWith("polish") == true) {
+            drawAiGuideCard(canvas)
             return
         }
         if (polishOptions.isNotEmpty()) {
@@ -1307,7 +1459,11 @@ class WeikeKeyboardView(
             }
         }
         canvas.restore()
-        drawKeyboardFrom(canvas, dp(240), superSayPinyin)
+        if (showSpellingRow()) {
+            drawSpellingRow(canvas)
+            candidates(canvas, pinyinCandidates, "", onPick = actions::chooseCandidate)
+        }
+        drawKeyboardFrom(canvas, superSayKeyboardTop(), superSayPinyin)
     }
 
     private fun numberRow(canvas: Canvas, y: Float, h: Float, inset: Float, keyWidth: Float) {
@@ -1331,7 +1487,10 @@ class WeikeKeyboardView(
         val bottomReserve = keyboardBottomReserve().coerceAtLeast(dp(30)) + bottomActionHeight
         val keyHeight = (contentBottom() - top - gap - bottomReserve - gap * 3) / 4f
         val keyWidth = (width - edge * 2 - gap * 4) / 5f
-        val functionKey = blend(key, muted, if (keyboardTheme == KeyboardTheme.DARK) .24f else .28f)
+        // Derive from specialKey so every modifier/function key shares the same
+        // warm rose tint; blending towards `muted` produced a cool grey that
+        // clashed with the pink theme.
+        val functionKey = blend(key, specialKey, if (keyboardTheme == KeyboardTheme.DARK) .5f else .55f)
         fun cell(column: Int, row: Int, rowSpan: Int = 1, columnSpan: Int = 1): RectF {
             val left = edge + column * (keyWidth + gap)
             val topY = top + row * (keyHeight + gap)
@@ -1420,7 +1579,7 @@ class WeikeKeyboardView(
 
             val emoji = cell(0, 3)
             functionBox(emoji)
-            centeredLabel(canvas, "☺", emoji, 25f, white, Paint.Align.CENTER)
+            lucide(canvas, R.drawable.ic_lucide_smile, emoji.centerX(), emoji.centerY(), dp(23), white)
             target(emoji, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
                 punctuationStripVisible = false
                 emojiPanel = true; candidateExpanded = false; invalidate()
@@ -1443,7 +1602,7 @@ class WeikeKeyboardView(
             val touchBottom = bottomTop + bottomActionHeight
             val switchKeyboard = RectF(edge, bottomTop, edge + keyWidth, touchBottom)
             val bottomIconY = switchKeyboard.centerY()
-            globe(canvas, switchKeyboard.centerX(), bottomIconY, muted, dp(24))
+            lucide(canvas, R.drawable.ic_lucide_globe, switchKeyboard.centerX(), bottomIconY, dp(24), muted)
             target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
         val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
@@ -1468,7 +1627,7 @@ class WeikeKeyboardView(
             punctuationStripVisible = true
             candidateExpanded = false
             emojiPanel = false
-            actions.typeEnglish("，")
+            actions.punctuationKeyTapped()
             invalidate()
         }
 
@@ -1493,12 +1652,15 @@ class WeikeKeyboardView(
         letterKey(2, 1, "JKL", "5")
         letterKey(3, 1, "MNO", "6")
 
-        val emojiTop = cell(4, 1)
-        key(canvas, emojiTop)
-        centeredLabel(canvas, "^^", emojiTop, 18f, white, Paint.Align.CENTER)
-        target(emojiTop, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+        val kaomojiKey = cell(4, 1)
+        key(canvas, kaomojiKey)
+        centeredLabel(canvas, "^_^", kaomojiKey, 15f, white, Paint.Align.CENTER)
+        target(kaomojiKey, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             punctuationStripVisible = false
-            emojiPanel = true; candidateExpanded = false; invalidate()
+            emojiPanel = false
+            candidateExpanded = false
+            kaomojiStripVisible = !kaomojiStripVisible
+            invalidate()
         }
 
         val english = cell(0, 2)
@@ -1514,13 +1676,13 @@ class WeikeKeyboardView(
         letterKey(3, 2, "WXYZ", "9")
 
         val enter = cell(4, 2, rowSpan = 2)
-        functionBox(enter)
-        centeredLabel(canvas, "发送", enter, 18f, muted, Paint.Align.CENTER)
+        rounded(canvas, enter, dp(9), if (isPressed(enter)) pressedKey else accent)
+        centeredLabel(canvas, "发送", enter, 18f, Color.WHITE, Paint.Align.CENTER)
         target(enter, keySound = true, longPressAction = { actions.newline() }) { actions.enter() }
 
         val emoji = cell(0, 3)
         functionBox(emoji)
-        centeredLabel(canvas, "☺", emoji, 25f, white, Paint.Align.CENTER)
+        lucide(canvas, R.drawable.ic_lucide_smile, emoji.centerX(), emoji.centerY(), dp(23), white)
         target(emoji, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             punctuationStripVisible = false
             emojiPanel = true; candidateExpanded = false; invalidate()
@@ -1531,7 +1693,10 @@ class WeikeKeyboardView(
         centeredLabel(canvas, "选拼音", pickPinyin, 18f, white, Paint.Align.CENTER)
         target(pickPinyin, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             punctuationStripVisible = false
-            candidateExpanded = true
+            if (showSpellingRow()) {
+                spellingScroll = if (spellingScroll >= spellingMaxScroll) 0f
+                    else (spellingScroll + width * .65f).coerceAtMost(spellingMaxScroll)
+            } else candidateExpanded = true
             emojiPanel = false
             invalidate()
         }
@@ -1550,7 +1715,7 @@ class WeikeKeyboardView(
         val touchBottom = bottomTop + bottomActionHeight
         val switchKeyboard = RectF(edge, bottomTop, edge + keyWidth, touchBottom)
         val bottomIconY = switchKeyboard.centerY()
-        globe(canvas, switchKeyboard.centerX(), bottomIconY, muted, dp(24))
+        lucide(canvas, R.drawable.ic_lucide_globe, switchKeyboard.centerX(), bottomIconY, dp(24), muted)
         target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
         val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
@@ -1578,9 +1743,12 @@ class WeikeKeyboardView(
         canvas: Canvas,
         candidateItems: List<PinyinCandidate>,
         emptyLabel: String,
+        dismissible: Boolean = false,
         onPick: (PinyinCandidate) -> Unit
     ) {
-        val y = dp(11)
+        val spellingHeight = if (mode == KeyboardMode.PINYIN) spellingRowHeight() else 0f
+        if (spellingHeight > 0) drawSpellingRow(canvas)
+        val y = if (mode == KeyboardMode.VOICE) dp(291) else dp(11) + spellingHeight
         val textSize = (18 + candidateTextSizeLevel * 2).toFloat()
         val rowHeight = maxOf(dp(37), sp(textSize.toInt() + 16))
         val expandWidth = dp(43)
@@ -1612,16 +1780,23 @@ class WeikeKeyboardView(
         canvas.restore()
         val expand = RectF(width - dp(5) - expandWidth, y, width - dp(5), y + rowHeight)
         rounded(canvas, expand, dp(8), key)
-        lucide(canvas, if (candidateExpanded) R.drawable.ic_lucide_chevron_down else R.drawable.ic_lucide_chevron_right, expand.centerX(), expand.centerY(), dp(18), muted)
-        target(expand, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
-            candidateExpanded = !candidateExpanded
-            emojiPanel = false
-            invalidate()
+        // Next-word predictions (no live composition) get a dismiss button:
+        // there is nothing to expand, and users need a way to clear the bar to
+        // reach the mode tabs. Real composition keeps the expand chevron.
+        if (dismissible) {
+            lucide(canvas, R.drawable.ic_lucide_x, expand.centerX(), expand.centerY(), dp(18), muted)
+            target(expand, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.dismissPredictions() }
+        } else {
+            lucide(canvas, if (candidateExpanded) R.drawable.ic_lucide_chevron_down else R.drawable.ic_lucide_chevron_right, expand.centerX(), expand.centerY(), dp(18), muted)
+            target(expand, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+                candidateExpanded = !candidateExpanded
+                emojiPanel = false
+                invalidate()
+            }
         }
     }
 
-    private fun drawPunctuationStrip(canvas: Canvas) {
-        val y = dp(11)
+    private fun drawPunctuationStrip(canvas: Canvas) {        val y = dp(11)
         val rowHeight = dp(42)
         val expandWidth = dp(43)
         val strip = RectF(dp(5), y, width - dp(5) - expandWidth, y + rowHeight)
@@ -1637,7 +1812,7 @@ class WeikeKeyboardView(
             val visibleBox = RectF(box).apply { intersect(strip) }
             target(visibleBox, keySound = true, previewLabel = symbol) {
                 punctuationStripVisible = false
-                actions.typeEnglish(symbol)
+                actions.choosePunctuation(symbol)
                 invalidate()
             }
         }
@@ -1651,12 +1826,44 @@ class WeikeKeyboardView(
         }
     }
 
+    /** iOS-style kaomoji bar: even slots keep the rhythm of the punctuation
+     *  strip; width-based layout silently dropped single-glyph ♪ ♡ chips. */
+    private fun drawKaomojiStrip(canvas: Canvas) {
+        val y = dp(11)
+        val rowHeight = dp(42)
+        val expandWidth = dp(43)
+        val strip = RectF(dp(5), y, width - dp(5) - expandWidth, y + rowHeight)
+        candidateStrip = RectF(0f, y - dp(4), width.toFloat(), y + rowHeight + dp(5))
+        canvas.save()
+        canvas.clipRect(strip)
+        paint.textSize = sp(15)
+        paint.typeface = Typeface.DEFAULT
+        val slot = strip.width() / kaomoji.size
+        kaomoji.forEachIndexed { index, entry ->
+            val box = RectF(strip.left + index * slot, y, strip.left + (index + 1) * slot, y + rowHeight)
+            centeredLabel(canvas, entry, box, 15f, white, Paint.Align.CENTER)
+            target(box, keySound = true) {
+                kaomojiStripVisible = false
+                actions.typeEnglish(entry)
+                invalidate()
+            }
+        }
+        canvas.restore()
+        val collapse = RectF(width - dp(5) - expandWidth, y, width - dp(5), y + rowHeight)
+        rounded(canvas, collapse, dp(8), key)
+        lucide(canvas, R.drawable.ic_lucide_chevron_down, collapse.centerX(), collapse.centerY(), dp(18), muted)
+        target(collapse, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+            kaomojiStripVisible = false
+            invalidate()
+        }
+    }
+
     private fun drawExpandedCandidates(canvas: Canvas) {
         val items = when {
             mode == KeyboardMode.ENGLISH -> englishCandidates
             else -> pinyinCandidates
         }
-        val top = dp(58)
+        val top = dp(58) + spellingRowHeight()
         val gap = dp(7)
         val columns = 4
         val cellWidth = (width - dp(10) - gap * (columns - 1)) / columns
@@ -1819,7 +2026,7 @@ class WeikeKeyboardView(
         if (pinyin) {
             centeredLabel(canvas, "'词", shift, 14f, white, Paint.Align.CENTER)
         } else {
-            lucide(canvas, R.drawable.ic_lucide_arrow_big_up, shift.centerX(), shift.centerY(), dp(19), if (capsLock) Color.WHITE else white)
+            lucide(canvas, R.drawable.ic_lucide_arrow_big_up, shift.centerX(), shift.centerY(), dp(20), if (capsLock) Color.WHITE else white)
         }
         target(shift, keySound = true) {
             if (pinyin) actions.typePinyin("'") else {
@@ -1891,10 +2098,10 @@ class WeikeKeyboardView(
         }
         key(canvas, language)
         key(canvas, space)
-        rounded(canvas, enter, dp(10), Color.rgb(7, 193, 96))
+        rounded(canvas, enter, dp(10), if (isPressed(enter)) pressedKey else accent)
         centeredLabel(canvas, "123", number, 16f, white, Paint.Align.CENTER)
-        centeredLabel(canvas, "☺", emoji, 21f, white, Paint.Align.CENTER)
-        centeredLabel(canvas, "中/EN", language, 11f, white, Paint.Align.CENTER)
+        lucide(canvas, R.drawable.ic_lucide_smile, emoji.centerX(), emoji.centerY(), dp(22), white)
+        centeredLabel(canvas, "中/EN", language, 12f, white, Paint.Align.CENTER)
         centeredLabel(canvas, "恋爱键盘", space, 14f, muted, Paint.Align.CENTER)
         centeredLabel(canvas, if (pinyin) "\u62fc" else "EN", RectF(space.right - dp(32), space.top, space.right - dp(6), space.bottom), 12f, muted, Paint.Align.CENTER)
         centeredLabel(canvas, enterLabel, enter, 14f, Color.WHITE, Paint.Align.CENTER)
@@ -1920,10 +2127,10 @@ class WeikeKeyboardView(
         rounded(canvas, number, dp(10), if (isPressed(number)) pressedKey else specialKey)
         key(canvas, emoji)
         key(canvas, space)
-        rounded(canvas, enter, dp(10), Color.rgb(7, 193, 96))
+        rounded(canvas, enter, dp(10), if (isPressed(enter)) pressedKey else accent)
         centeredLabel(canvas, "123", number, 18f, white, Paint.Align.CENTER)
-        centeredLabel(canvas, "☺", emoji, 21f, white, Paint.Align.CENTER)
-        centeredLabel(canvas, "space", space, 18f, white, Paint.Align.CENTER)
+        lucide(canvas, R.drawable.ic_lucide_smile, emoji.centerX(), emoji.centerY(), dp(22), white)
+        centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
         centeredLabel(canvas, enterLabel.lowercase(), enter, 18f, Color.WHITE, Paint.Align.CENTER)
         target(number, hapticFeedback = null) { actions.toggleSymbols() }
         target(emoji, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
@@ -1938,8 +2145,9 @@ class WeikeKeyboardView(
         val touchBottom = top + dp(58)
         val iconY = (actionTop + touchBottom) / 2f
         val actionWidth = (width - edge * 2 - dp(7) * 4) / 5f
-        val switchKeyboard = RectF(edge, actionTop, edge + actionWidth, touchBottom)
-        lucide(canvas, R.drawable.ic_lucide_chevron_left, switchKeyboard.centerX(), iconY, dp(24), muted)
+        val switchKeyboard = RectF(edge, actionTop, edge + dp(116), touchBottom)
+        lucide(canvas, R.drawable.ic_lucide_chevron_left, switchKeyboard.left + dp(16), iconY, dp(24), muted)
+        label(canvas, "返回拼音", switchKeyboard.left + dp(34), iconY + dp(5), 14f, muted, Paint.Align.LEFT)
         target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             actions.returnToNineKeyPinyin()
         }
@@ -1993,6 +2201,11 @@ class WeikeKeyboardView(
                 listOf("#", "%", "+", "*", "=", "\\", "|", "~", "<", ">"),
                 listOf("_", "^", "`", "·", "•", "√", "π", "÷", "×", "§"),
                 listOf("€", "£", "¥", "¢", "©", "®", "™", "°", "℃", "№")
+            ),
+            listOf(
+                listOf("【", "】", "《", "》", "「", "」", "『", "』", "〔", "〕"),
+                listOf("￥", "——", "……", "·", "～", "•", "‖", "°", "℃", "§"),
+                listOf("＾", "＿", "〃", "♪", "♡", "☆", "★", "→", "※", "〓")
             )
         )
         symbolsPage = symbolsPage.coerceIn(0, symbolPages.size - 1)
@@ -2012,14 +2225,21 @@ class WeikeKeyboardView(
         key(canvas, pageKey)
         key(canvas, space)
         key(canvas, delete)
-        rounded(canvas, enter, dp(10), white)
+        rounded(canvas, enter, dp(10), if (isPressed(enter)) pressedKey else accent)
         centeredLabel(canvas, "ABC", number, 18f, white, Paint.Align.CENTER)
-        centeredLabel(canvas, if (symbolsPage == 0) "#+=" else "123", pageKey, 18f, white, Paint.Align.CENTER)
+        centeredLabel(
+            canvas,
+            when (symbolsPage) { 0 -> "#+="; 1 -> "中文"; else -> "123" },
+            pageKey, 18f, white, Paint.Align.CENTER
+        )
         centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
         lucide(canvas, R.drawable.ic_lucide_delete, delete.centerX(), delete.centerY(), dp(23), white)
-        lucide(canvas, R.drawable.ic_lucide_move_right, enter.centerX(), enter.centerY(), dp(21), actionIcon)
+        lucide(canvas, R.drawable.ic_lucide_move_right, enter.centerX(), enter.centerY(), dp(21), Color.WHITE)
         target(number, hapticFeedback = null) { actions.toggleSymbols() }
-        target(pageKey, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { symbolsPage = 1 - symbolsPage; invalidate() }
+        target(pageKey, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+            symbolsPage = (symbolsPage + 1) % symbolPages.size
+            invalidate()
+        }
         target(space, keySound = true) { actions.typeEnglish(" ") }
         target(delete, repeat = true, keySound = true) { actions.backspace() }
         target(enter, keySound = true, longPressAction = { actions.newline() }) { actions.enter() }
@@ -2217,19 +2437,6 @@ class WeikeKeyboardView(
         paint.alpha = 255
     }
 
-    private fun globe(canvas: Canvas, x: Float, y: Float, color: Int, size: Float) {
-        paint.style = Paint.Style.STROKE
-        paint.color = color
-        paint.strokeWidth = maxOf(dp(2), size * .08f)
-        val r = size * .42f
-        canvas.drawCircle(x, y, r, paint)
-        canvas.drawOval(RectF(x - r * .45f, y - r, x + r * .45f, y + r), paint)
-        canvas.drawLine(x - r, y, x + r, y, paint)
-        canvas.drawLine(x - r * .82f, y - r * .42f, x + r * .82f, y - r * .42f, paint)
-        canvas.drawLine(x - r * .82f, y + r * .42f, x + r * .82f, y + r * .42f, paint)
-        paint.style = Paint.Style.FILL
-    }
-
     private fun loadingDots(canvas: Canvas, x: Float, y: Float, alpha: Float) {
         val step = (System.currentTimeMillis() % 800L).toFloat() / 800f
         repeat(6) { index ->
@@ -2350,6 +2557,29 @@ class WeikeKeyboardView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            spellingTouch = showSpellingRow() && event.y >= spellingRowTop() && event.y < spellingRowTop() + spellingRowHeight()
+            if (spellingTouch) {
+                spellingDownX = event.x
+                spellingStartScroll = spellingScroll
+                return true
+            }
+        } else if (spellingTouch) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    spellingScroll = (spellingStartScroll + spellingDownX - event.x).coerceIn(0f, spellingMaxScroll)
+                    invalidate()
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (kotlin.math.abs(event.x - spellingDownX) < dp(8)) {
+                        targets.lastOrNull { it.enabled && it.box.contains(event.x, event.y) }?.action?.invoke()
+                    }
+                    spellingTouch = false
+                }
+                MotionEvent.ACTION_CANCEL -> spellingTouch = false
+            }
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 touchDownX = event.x
@@ -2822,11 +3052,49 @@ class WeikeKeyboardView(
     private fun keyLetterSize(size: Float): Float = if (isLandscape()) size * .8f else size
     private fun isLandscape(): Boolean =
         resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    private fun standardKeyboardTop(): Float = (if (!pinyinReady) dp(70) else dp(62)) + (if (mode == KeyboardMode.PINYIN) keyboardInputExtraHeight() else 0f)
+    private fun showSpellingRow(): Boolean = (mode == KeyboardMode.PINYIN || (mode == KeyboardMode.VOICE && superSayPinyin)) && pinyinNineKey && pinyinBuffer.isNotBlank() && spellingOptions.isNotEmpty()
+    private fun spellingRowHeight(): Float = if (showSpellingRow()) dp(40) else 0f
+
+    private fun keyboardInputExtraHeight(): Float = if (!showSpellingRow()) 0f else if (mode == KeyboardMode.VOICE) dp(98) else dp(40)
+
+    private fun spellingRowTop(): Float = if (mode == KeyboardMode.VOICE) dp(240) else 0f
+
+    private fun drawSpellingRow(canvas: Canvas) {
+        val top = spellingRowTop()
+        val options = listOf("") + spellingOptions
+        paint.textSize = sp(15)
+        paint.typeface = Typeface.DEFAULT
+        val widths = options.map { maxOf(dp(46), paint.measureText(it.ifBlank { "全部" }) + dp(24)) }
+        spellingMaxScroll = (widths.sum() + dp(8) - width).coerceAtLeast(0f)
+        spellingScroll = spellingScroll.coerceIn(0f, spellingMaxScroll)
+        var left = dp(4) - spellingScroll
+        canvas.save()
+        canvas.clipRect(0f, top, width.toFloat(), top + dp(40))
+        options.forEachIndexed { index, spelling ->
+            val box = RectF(left, top + dp(4), left + widths[index], top + dp(37))
+            left = box.right
+            if (box.right > 0 && box.left < width) {
+                if (spelling == selectedSpelling) rounded(canvas, box, dp(10), tabBackground)
+                label(canvas, spelling.ifBlank { "全部" }, box.centerX(), box.centerY() + dp(5), 15f,
+                    if (spelling == selectedSpelling) accent else muted, Paint.Align.CENTER, spelling == selectedSpelling)
+                val hit = RectF(box).apply { intersect(0f, top, width.toFloat(), top + dp(40)) }
+                target(hit) { actions.choosePinyinSpelling(spelling) }
+            }
+        }
+        canvas.restore()
+    }
+    private fun superSayKeyboardTop(): Float = dp(240) + (if (mode == KeyboardMode.VOICE) keyboardInputExtraHeight() else 0f)
+
     private fun contentBottom(): Float = height.toFloat() - dp(keyboardBottomOffsetLevel * 8)
     private fun keyboardBottomReserve(): Float = if (cursorSliderEnabled) dp(32) else dp(8)
     private fun hasComposition(): Boolean =
         ((mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) && pinyinBuffer.isNotBlank()) ||
             (mode == KeyboardMode.ENGLISH && englishBuffer.isNotBlank())
+    private fun hasCompositionCandidates(): Boolean =
+        if (mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) pinyinCandidates.isNotEmpty()
+        else englishCandidates.isNotEmpty()
+
     private fun hasPredictions(): Boolean = mode in listOf(KeyboardMode.PINYIN, KeyboardMode.ENGLISH, KeyboardMode.SYMBOLS) &&
         predictionCandidates.isNotEmpty()
     private fun polishIndexAt(x: Float, textLeft: Float): Int {

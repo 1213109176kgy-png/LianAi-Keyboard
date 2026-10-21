@@ -4,4 +4,8 @@
     <external-files-path
         name="updates"
         path="updates/" />
+    <!-- One-tap screenshot frames for 截图识别回复. -->
+    <external-files-path
+        name="screenshots"
+        path="screenshots/" />
 </paths>

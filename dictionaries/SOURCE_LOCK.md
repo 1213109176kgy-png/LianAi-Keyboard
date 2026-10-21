@@ -34,3 +34,7 @@ build/weike_t9.schema.yaml
 
 The application verifies the signed manifest, package SHA-256, package size,
 safe archive paths, and this required file set before activating a package.
+
+## Factory enhanced bundle
+
+The APK additionally includes dictionaries/rime-ice-enhanced-2026.07.20.zip (26,618,785 bytes), SHA-256 b870605c963d7c8caa05ed9e2c5e095475014d98dbeccd2cb4782e3659463447, from https://vertick-1257312282.cos.ap-guangzhou.myqcloud.com/rime-ice-enhanced-2026.07.20.zip. It includes ext, tencent, melt_eng and Emoji data under the existing Rime-Ice GPL-3.0-or-later attribution. It is extracted and verified locally before first decoder startup. Existing active downloaded bundles and user learning are preserved. Wanxiang remains an optional separate download.
