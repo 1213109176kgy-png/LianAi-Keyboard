@@ -84,7 +84,7 @@ class ModelConfigurationViews(private val context: Context) {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(4) }
     }
 
-    fun sheet(title: String, subtitle: String, content: View, footer: View? = null): Dialog {
+    fun sheet(title: String, subtitle: String, content: View, footer: View? = null, prepareWindow: ((Window) -> Unit)? = null): Dialog {
         val dialog = Dialog(context)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val panel = object : LinearLayout(context) {
@@ -132,9 +132,12 @@ class ModelConfigurationViews(private val context: Context) {
             })
         }
         dialog.setContentView(panel)
+        dialog.setCanceledOnTouchOutside(true)
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+            prepareWindow?.invoke(this)
         }
         dialog.show()
         dialog.window?.apply {
@@ -142,6 +145,50 @@ class ModelConfigurationViews(private val context: Context) {
             setGravity(Gravity.CENTER)
             setDimAmount(.42f)
         }
+        return dialog
+    }
+
+    fun modelAccessDialog(message: String, prepareWindow: (Window) -> Unit, onVip: () -> Unit, onModels: () -> Unit): Dialog {
+        lateinit var dialog: Dialog
+        val options = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            fun option(icon: Int, title: String, detail: String) {
+                addView(LinearLayout(context).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = shape(surface, soft)
+                    setPadding(dp(14), dp(14), dp(14), dp(14))
+                    addView(ImageView(context).apply {
+                        setImageResource(icon)
+                        setColorFilter(primary)
+                        setPadding(dp(10), dp(10), dp(10), dp(10))
+                        background = shape(soft)
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(12) })
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(TextView(context).apply {
+                            text = title
+                            textSize = 14f
+                            typeface = Typeface.DEFAULT_BOLD
+                            setTextColor(ink)
+                        })
+                        addView(TextView(context).apply {
+                            text = detail
+                            textSize = 12f
+                            setTextColor(muted)
+                            setLineSpacing(dp(2).toFloat(), 1f)
+                        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(5) })
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
+            }
+            option(R.drawable.ic_lucide_wand_sparkles, "VIP 官方模型", "使用已配置的官方模型，无需填写接口参数。")
+            option(R.drawable.ic_lucide_cloud, "使用自己的模型", "添加模型接口与 API Key，为对应功能选择模型。")
+        }
+        val actions = LinearLayout(context).apply {
+            addView(button("去配置模型") { dialog.dismiss(); onModels() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(10) })
+            addView(button("开通 VIP", filled = true) { dialog.dismiss(); onVip() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        }
+        dialog = sheet("选择 AI 使用方式", message, options, actions, prepareWindow)
         return dialog
     }
 

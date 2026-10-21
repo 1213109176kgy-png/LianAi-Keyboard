@@ -30,6 +30,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.weike.ime.R
+import com.weike.ime.ui.ModelConfigurationViews
 import com.weike.ime.ImagePickerActivity
 import com.weike.ime.data.AppContainer
 import com.weike.ime.data.AppSettingsRepository
@@ -1293,7 +1294,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     /** 截图识别回复：相册选聊天截图 → 后台视觉模型 → 多条场景化回复。 */
-    private var modelSetupDialog: android.app.AlertDialog? = null
+    private var modelSetupDialog: android.app.Dialog? = null
     private fun showModelSetupDialog(message: String) {
         if (modelSetupDialog?.isShowing == true) return
         fun open(destination: String) {
@@ -1301,18 +1302,23 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra("model_setup_destination", destination))
         }
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("选择 AI 使用方式").setMessage(message)
-            .setPositiveButton("开通 VIP") { _, _ -> open("vip") }
-            .setNegativeButton("去配置模型") { _, _ -> open("models") }
-            .setNeutralButton("取消", null).create()
-        dialog.window?.apply {
-            setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
-            attributes = attributes.apply { token = this@WeikeInputMethodService.window?.window?.decorView?.windowToken ?: keyboard.windowToken }
-            addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        runCatching {
+            val dialog = ModelConfigurationViews(this).modelAccessDialog(message,
+                prepareWindow = { window ->
+                    window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+                    window.attributes = window.attributes.apply {
+                        token = this@WeikeInputMethodService.window?.window?.decorView?.windowToken ?: keyboard.windowToken
+                    }
+                    window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+                },
+                onVip = { open("vip") },
+                onModels = { open("models") })
+            modelSetupDialog = dialog
+            dialog.setOnDismissListener { if (modelSetupDialog === dialog) modelSetupDialog = null }
+        }.onFailure {
+            modelSetupDialog = null
+            toast(message)
         }
-        modelSetupDialog = dialog
-        runCatching { dialog.show() }.onFailure { toast(message) }
     }
 
     private fun withModelAccess(feature: ModelFeature, action: () -> Unit) {
