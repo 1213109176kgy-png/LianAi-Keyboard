@@ -33,6 +33,9 @@ class ScreenCaptureActivity : Activity() {
             } else {
                 startService(service)
             }
+            // 输入法拉起本页时把我们整个任务带到了前台；授权完成后必须退回后台，
+            // 让微信/短信回到前台，截屏抓到的才是聊天画面而不是本应用页面。
+            moveTaskToBack(true)
         }
         finish()
     }

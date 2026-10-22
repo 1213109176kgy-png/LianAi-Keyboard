@@ -66,9 +66,9 @@ class ScreenCaptureService : Service() {
             "lianai-shot", width, height, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader!!.surface, null, handler
         )
-        // Let the consent activity finish and the chat screen re-render before
-        // grabbing the frame, otherwise the transition frame ends up captured.
-        handler.postDelayed({ captureFrame(width, height, cropBottom) }, 500)
+        // 退回后台 + 聊天应用回到前台需要一次任务切换动画；抓早了会把过渡
+        // 帧或本应用画面截进去。
+        handler.postDelayed({ captureFrame(width, height, cropBottom) }, 800)
         return START_NOT_STICKY
     }
 
