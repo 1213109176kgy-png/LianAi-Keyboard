@@ -3,6 +3,7 @@ package com.weike.ime.ime
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.drawable.GradientDrawable
@@ -29,6 +30,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import com.weike.ime.MainActivity
 import com.weike.ime.R
 import com.weike.ime.ui.ModelConfigurationViews
 import com.weike.ime.data.AppContainer
@@ -1151,6 +1153,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         if (dictationActive) stopDictation(commit = true) else startDictation()
     }
 
+    /** 无录音权限时把用户直接送到 App 的麦克风授权弹窗，而不是只留一句提示。 */
+    private fun openMicPermissionSetup() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(MainActivity.EXTRA_REQUEST_MIC_PERMISSION, true)
+        }
+        runCatching { startActivity(intent) }
+    }
+
     override fun startDictation() {
         if (dictationActive) return
         if (sensitiveField) {
@@ -1162,7 +1173,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             return
         }
         if (!recorder.canRecord()) {
-            toast("未授予麦克风权限，请打开恋爱键盘完成授权")
+            toast("未授予麦克风权限，正在打开恋爱键盘授权")
+            openMicPermissionSetup()
             return
         }
         // finishCompositionThen 可能排队等拼音组合提交完；armed 保证排队期间
@@ -1655,8 +1667,9 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             return
         }
         if (!recorder.canRecord()) {
-            voiceState = VoiceUiState.Error("未授予麦克风权限，请打开恋爱键盘完成授权")
-            toast("未授予麦克风权限，请打开恋爱键盘完成授权")
+            voiceState = VoiceUiState.Error("未授予麦克风权限，正在打开恋爱键盘授权")
+            toast("未授予麦克风权限，正在打开恋爱键盘授权")
+            openMicPermissionSetup()
             render()
             return
         }

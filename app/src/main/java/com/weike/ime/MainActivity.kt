@@ -135,11 +135,11 @@ class MainActivity : AppCompatActivity() {
             post { render(false) }
         }
 
-        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-            super.onSizeChanged(w, h, oldw, oldh)
-            // post 时机 width 仍为 0 时 render 会直接 return, 胶囊与文字颜色
-            // 就再也不刷新; 尺寸真正确定后必须补一次渲染。
-            if (w > 0) render(false)
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            super.onLayout(changed, left, top, right, bottom)
+            // 每次布局后补一次渲染：展开动画等中间阶段可能量出退化尺寸，
+            // 若只靠 onSizeChanged，脏参数会残留到最终布局之后无法自愈。
+            render(false)
         }
 
         fun setSelected(index: Int, notify: Boolean = false) {
@@ -151,16 +151,28 @@ class MainActivity : AppCompatActivity() {
         }
 
         private fun render(animated: Boolean) {
-            if (width == 0 || options.isEmpty()) return
+            if (width == 0 || height == 0 || options.isEmpty()) return
             val inset = (4 * density).toInt()
             val cell = width / options.size
-            selector.layoutParams = FrameLayout.LayoutParams(cell - inset * 2, height - inset * 2).apply {
-                leftMargin = inset
-                topMargin = inset
-            }
             val targetX = (selected * cell).toFloat()
             if (animated) selector.animate().translationX(targetX).setDuration(220).setInterpolator(DecelerateInterpolator()).start()
-            else selector.translationX = targetX
+            else {
+                selector.animate().cancel()
+                selector.translationX = targetX
+            }
+            // 中间布局阶段宽高可能量出负值，负值会被 FrameLayout 当成 MATCH_PARENT，
+            // 胶囊就铺满整行（两个 Tab 看起来同时选中），必须钳成正值。
+            val pillWidth = (cell - inset * 2).coerceAtLeast(1)
+            val pillHeight = (height - inset * 2).coerceAtLeast(1)
+            val params = selector.layoutParams
+            if (params !is FrameLayout.LayoutParams || params.width != pillWidth || params.height != pillHeight ||
+                params.leftMargin != inset || params.topMargin != inset
+            ) {
+                selector.layoutParams = FrameLayout.LayoutParams(pillWidth, pillHeight).apply {
+                    leftMargin = inset
+                    topMargin = inset
+                }
+            }
             labels.forEachIndexed { index, label ->
                 label.setTextColor(if (index == selected) Color.WHITE else ContextCompat.getColor(context, R.color.weike_muted))
                 label.typeface = if (index == selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
@@ -633,30 +645,58 @@ class MainActivity : AppCompatActivity() {
         // Silent daily check; never blocks or prompts on its own.
         lifecycleScope.launch { fetchLatestUpdate(silent = true) }
         showPage(openPageFromIntent(intent) ?: if (pendingPurchase() != null || isPaymentReturn(intent)) Page.SUBSCRIPTION else Page.ACCOUNT)
-        maybeRequestMicPermission()
+        maybeRequestMicPermission(force = intent?.getBooleanExtra(EXTRA_REQUEST_MIC_PERMISSION, false) == true)
     }
 
-    /** 首次打开引导授权麦克风：语音输入（录音转文字）依赖录音权限。 */
-    private fun maybeRequestMicPermission() {
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    /**
+     * 引导授权麦克风：语音输入（录音转文字）依赖录音权限，未授权前每次打开
+     * App 都直接弹系统授权框，让用户不必自己去设置里找。键盘语音按钮无权限
+     * 时也会通过 EXTRA_REQUEST_MIC_PERMISSION 拉起本页强制走一遍该流程。
+     */
+    private fun maybeRequestMicPermission(force: Boolean = false) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) return
+        // asked 只用于区分「从未问过」和「已被永久拒绝」：永久拒绝后再调系统
+        // 授权框会被系统静默拒绝，必须引导用户去系统设置手动开启。
         val preferences = getSharedPreferences("onboarding", MODE_PRIVATE)
         val asked = preferences.getBoolean(KEY_MIC_PERMISSION_ASKED, false)
-        if (granted || asked) return
         preferences.edit().putBoolean(KEY_MIC_PERMISSION_ASKED, true).apply()
-        themedDialog("开启麦克风权限", "用于键盘语音输入") { body, dialog ->
-            body.addView(TextView(this).apply {
-                text = "按住键盘上的麦克风说话，即可把语音实时转成文字。\n\n录音仅用于即时识别，不保存任何录音文件。"
-                textSize = 13f
-                setLineSpacing(dp(4).toFloat(), 1f)
-                setTextColor(getColor(R.color.weike_text))
-            })
-            body.addView(compactFormActionButton("开启麦克风", true) {
-                dialog.dismiss()
-                requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
-            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
-            body.addView(compactFormActionButton("稍后再说", false) { dialog.dismiss() },
-                margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
-        }.show()
+        val systemDialogAvailable = force || !asked ||
+            shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+        if (systemDialogAvailable) {
+            themedDialog("开启麦克风权限", "键盘语音输入必需") { body, dialog ->
+                body.addView(TextView(this).apply {
+                    text = "按住键盘右下角的麦克风说话，即可把语音实时转成文字。\n\n需要获得录音权限才能使用语音输入；录音仅用于即时识别，不保存任何录音文件。"
+                    textSize = 13f
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                    setTextColor(getColor(R.color.weike_text))
+                })
+                body.addView(compactFormActionButton("开启麦克风", true) {
+                    dialog.dismiss()
+                    requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
+                body.addView(compactFormActionButton("稍后再说", false) { dialog.dismiss() },
+                    margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
+            }.show()
+        } else {
+            themedDialog("麦克风权限已被拒绝", "语音输入无法使用") { body, dialog ->
+                body.addView(TextView(this).apply {
+                    text = "语音输入需要录音权限。当前该权限已被拒绝，请在系统设置中手动允许「麦克风」后再使用语音输入。"
+                    textSize = 13f
+                    setLineSpacing(dp(4).toFloat(), 1f)
+                    setTextColor(getColor(R.color.weike_text))
+                })
+                body.addView(compactFormActionButton("去系统设置开启", true) {
+                    dialog.dismiss()
+                    runCatching {
+                        startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+                        )
+                    }
+                }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 14))
+                body.addView(compactFormActionButton("稍后再说", false) { dialog.dismiss() },
+                    margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 8))
+            }.show()
+        }
     }
 
     /** IME setup-guide buttons jump straight to the subscription/model pages. */
@@ -690,6 +730,10 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_REQUEST_MIC_PERMISSION, false)) {
+            // 键盘语音按钮无权限时拉起：App 还在前台/后台存活，走这里强制弹授权。
+            maybeRequestMicPermission(force = true)
+        }
         openPageFromIntent(intent)?.let {
             showPage(it)
             return
@@ -1679,7 +1723,7 @@ class MainActivity : AppCompatActivity() {
         }
         asrHost.addView(card().apply {
             addView(cloudHelpText("语音输入（录音转文字）使用小米 MiMo 语音识别。前往小米 MiMo 开放平台创建 API Key 后填入即可。"))
-            addView(asrKeyInput, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
+            addView(asrKeyInput) // field() 已带 48dp 高度，勿再传 WRAP_CONTENT 覆盖成扁条
             addView(LinearLayout(this@MainActivity).apply {
                 gravity = Gravity.END
                 // 半宽居右：与测试连接/保存配置的双按钮布局同构，不再全宽占屏。
@@ -4045,6 +4089,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val UPDATE_PREFERENCES = "update_check"
         const val EXTRA_OPEN_PAGE = "open_page"
+        const val EXTRA_REQUEST_MIC_PERMISSION = "request_mic_permission"
         const val ONBOARDING_PREFERENCES = "onboarding"
         const val KEY_MIC_PERMISSION_ASKED = "mic_permission_asked"
         const val KEY_LAST_CHECK_AT = "last_check_at"
