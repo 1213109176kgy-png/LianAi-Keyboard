@@ -2196,29 +2196,27 @@ class WeikeKeyboardView(
         }
         val y = top + (keyHeight + gap) * 3
         val controlWidth = symbolWidth * 2 + dp(7)
-        val number = RectF(edge, y, edge + controlWidth, y + keyHeight)
         val pageKeyWidth = dp(44)
-        val pageKey = RectF(number.right + dp(7), y, number.right + dp(7) + pageKeyWidth, y + keyHeight)
         val enter = RectF(width - edge - controlWidth, y, width - edge, y + keyHeight)
         val deleteWidth = dp(43)
         val delete = RectF(enter.left - dp(7) - deleteWidth, y, enter.left - dp(7), y + keyHeight)
-        val space = RectF(pageKey.right + dp(7), y, delete.left - dp(7), y + keyHeight)
-        key(canvas, number)
-        key(canvas, pageKey)
+        // 原左下角 ABC（回字母走底部"返回拼音"即可）与符号分类键合并为一个宽键：
+        // 标签直说下一组是什么，循环 数字 → 英文 → 中文，用户不用猜窄键在切什么。
+        val switcher = RectF(edge, y, edge + controlWidth + dp(7) + pageKeyWidth, y + keyHeight)
+        val space = RectF(switcher.right + dp(7), y, delete.left - dp(7), y + keyHeight)
+        key(canvas, switcher)
         key(canvas, space)
         key(canvas, delete)
         rounded(canvas, enter, dp(10), if (isPressed(enter)) pressedKey else accent)
-        centeredLabel(canvas, "ABC", number, 18f, white, Paint.Align.CENTER)
         centeredLabel(
             canvas,
-            when (symbolsPage) { 0 -> "#+="; 1 -> "中文"; else -> "123" },
-            pageKey, 18f, white, Paint.Align.CENTER
+            when (symbolsPage) { 0 -> "切换英文符号"; 1 -> "切换中文符号"; else -> "切换数字符号" },
+            switcher, 17f, white, Paint.Align.CENTER
         )
         centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
         lucide(canvas, R.drawable.ic_lucide_delete, delete.centerX(), delete.centerY(), dp(23), white)
         lucide(canvas, R.drawable.ic_lucide_move_right, enter.centerX(), enter.centerY(), dp(21), Color.WHITE)
-        target(number, hapticFeedback = null) { actions.toggleSymbols() }
-        target(pageKey, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+        target(switcher, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             symbolsPage = (symbolsPage + 1) % symbolPages.size
             invalidate()
         }
