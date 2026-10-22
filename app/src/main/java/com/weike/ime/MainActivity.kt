@@ -1617,7 +1617,11 @@ class MainActivity : AppCompatActivity() {
                     loadProvider = { CloudProvider.CUSTOM },
                     save = { config, provider ->
                         val finalName = nameInput.text.toString().trim().ifBlank { "自定义模型" }
-                        repository.save(null, finalName, config.copy(provider = provider))
+                        val profile = repository.save(null, finalName, config.copy(provider = provider))
+                        // 首个模型保存后自动绑定全部业务，免去手动逐个选择的隐藏门槛。
+                        com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
+                            repository.select(slot, profile.id)
+                        }
                     },
                     test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() },
                     actionsHost = inlineFooter
@@ -1670,6 +1674,13 @@ class MainActivity : AppCompatActivity() {
                 loadProvider = { profile?.endpoint?.provider ?: CloudProvider.CUSTOM },
                 save = { config, provider ->
                     container.settings.userModels.save(profile?.id, name.text.toString(), config.copy(provider = provider))
+                    // 第一个模型保存后自动绑定全部业务，避免「配置了却不生效」的困惑。
+                    if (profile == null && container.settings.userModels.all().size == 1) {
+                        val saved = container.settings.userModels.all().first()
+                        com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
+                            container.settings.userModels.select(slot, saved.id)
+                        }
+                    }
                     dialog.dismiss(); showPage(Page.CLOUD)
                 },
                 test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() },
