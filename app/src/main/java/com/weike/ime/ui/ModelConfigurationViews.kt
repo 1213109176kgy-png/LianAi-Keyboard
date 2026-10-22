@@ -24,12 +24,12 @@ import com.weike.ime.R
 
 /** Shared controls for the model library, editor and selection dialogs. */
 class ModelConfigurationViews(private val context: Context) {
-    private val primary = Color.rgb(205, 53, 106)
+    private val primary = Color.rgb(255, 107, 157)
     private val soft = context.getColor(R.color.weike_key)
     private val surface = context.getColor(R.color.weike_panel)
     private val ink = context.getColor(R.color.weike_text)
     private val muted = context.getColor(R.color.weike_muted)
-    private val danger = Color.rgb(196, 58, 77)
+    private val danger = Color.rgb(228, 80, 110)
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()
     private fun shape(color: Int, border: Int? = null) = GradientDrawable().apply {
         setColor(color)

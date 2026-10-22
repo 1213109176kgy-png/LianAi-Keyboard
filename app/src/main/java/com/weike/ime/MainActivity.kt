@@ -135,6 +135,13 @@ class MainActivity : AppCompatActivity() {
             post { render(false) }
         }
 
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            // post 时机 width 仍为 0 时 render 会直接 return, 胶囊与文字颜色
+            // 就再也不刷新; 尺寸真正确定后必须补一次渲染。
+            if (w > 0) render(false)
+        }
+
         fun setSelected(index: Int, notify: Boolean = false) {
             val next = index.coerceIn(0, options.lastIndex)
             if (next == selected && !notify) return
@@ -1661,7 +1668,7 @@ class MainActivity : AppCompatActivity() {
         // Tab 2：ASR 模型——语音输入（录音转文字）专用，固定小米 MiMo。
         val asrKeyInput = modelViews.field("输入小米 MiMo API Key").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 10, bottom = 2)
         }
         lifecycleScope.launch {
             val asr = container.settings.cloudApiSettings.first().asr
