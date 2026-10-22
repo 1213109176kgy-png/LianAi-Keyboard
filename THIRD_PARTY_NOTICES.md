@@ -15,8 +15,8 @@
 - License: GPL-3.0-or-later
 - Used for: Chinese dictionaries and schema data under `app/src/main/assets/rime`.
 - Dictionary source revisions and the prebuilt package contract are recorded in
-  `dictionaries/SOURCE_LOCK.md`. The built-in package contains only
-  `8105 + base + others`; optional packages are independently downloaded.
+  `dictionaries/SOURCE_LOCK.md`. The APK includes a factory enhanced package in addition to
+  `8105 + base + others`: ext, tencent, English mixing and Emoji are activated offline on first use. Wanxiang remains an optional download.
 
 ## RIME-LMDG / Wanxiang grammar data
 

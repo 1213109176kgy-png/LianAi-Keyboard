@@ -31,7 +31,7 @@ class UserModelRepository private constructor(context: Context) {
             val id = item.getString("id")
             UserModelProfile(id, item.getString("name"), ModelEndpointConfig(item.getString("url"),
                 secrets.read("user_model_$id").orEmpty(), item.getString("model"),
-                runCatching { CloudProvider.valueOf(item.optString("provider")) }.getOrDefault(CloudProvider.CUSTOM)))
+                runCatching { CloudProvider.valueOf(item.optString("provider")) }.getOrDefault(CloudProvider.CUSTOM), item.optBoolean("thinkingEnabled", false)))
         }
     }.getOrDefault(emptyList())
     fun selectedId(slot: UserModelSlot) = preferences.getString("slot_${slot.name}", "").orEmpty()
@@ -48,7 +48,7 @@ class UserModelRepository private constructor(context: Context) {
         secrets.write("user_model_${profile.id}", endpoint.apiKey.trim())
         val array = JSONArray()
         list.forEach { item -> array.put(JSONObject().put("id", item.id).put("name", item.name)
-            .put("url", item.endpoint.url).put("model", item.endpoint.model).put("provider", item.endpoint.provider.name)) }
+            .put("url", item.endpoint.url).put("model", item.endpoint.model).put("provider", item.endpoint.provider.name).put("thinkingEnabled", item.endpoint.thinkingEnabled)) }
         check(preferences.edit().putString("models", array.toString()).commit()) { "保存模型失败" }
         changes.value++
         return profile
@@ -56,7 +56,7 @@ class UserModelRepository private constructor(context: Context) {
     @Synchronized fun remove(id: String) {
         val array = JSONArray()
         all().filterNot { it.id == id }.forEach { item -> array.put(JSONObject().put("id", item.id).put("name", item.name)
-            .put("url", item.endpoint.url).put("model", item.endpoint.model).put("provider", item.endpoint.provider.name)) }
+            .put("url", item.endpoint.url).put("model", item.endpoint.model).put("provider", item.endpoint.provider.name).put("thinkingEnabled", item.endpoint.thinkingEnabled)) }
         val edit = preferences.edit().putString("models", array.toString())
         UserModelSlot.entries.filter { selectedId(it) == id }.forEach { edit.remove("slot_${it.name}") }
         check(edit.commit()) { "删除模型失败" }

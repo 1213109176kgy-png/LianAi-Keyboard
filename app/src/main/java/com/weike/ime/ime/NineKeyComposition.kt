@@ -2,6 +2,13 @@ package com.weike.ime.ime
 
 /** Keeps a nine-key composition visible even before the decoder has an exact match. */
 object NineKeyComposition {
+    fun spellingOptions(code: String, readings: List<String>): List<String> {
+        val syllables = readings.map { it.substringBefore(' ') }.filter { spelling ->
+            spelling.isNotBlank() && (code.startsWith(codeFor(spelling)) || codeFor(spelling).startsWith(code))
+        }.distinct()
+        return syllables + syllables.map { it.take(1) }.distinct().filter { it !in syllables }
+    }
+
     fun display(
         raw: String,
         preedit: String,
@@ -27,9 +34,9 @@ object NineKeyComposition {
 
         val previousCode = previousRaw.filter(Char::isDigit)
         if (previousDisplay.isNotBlank() && previousCode.isNotBlank() && code.startsWith(previousCode)) {
-            return previousDisplay + code.removePrefix(previousCode)
+            return previousDisplay.filter { it.isLetter() || it == ' ' }.trimEnd() + "…"
         }
-        return code
+        return normalizedReadings.firstOrNull()?.plus("…") ?: "…"
     }
 
     fun codeFor(pinyin: String): String = buildString(pinyin.length) {

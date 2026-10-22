@@ -51,6 +51,7 @@ class VisionReplyClient(
                     .put(JSONObject().put("inlineData", JSONObject().put("mimeType", mime).put("data", imageBase64)))
                     .put(JSONObject().put("text", "分析这张聊天截图并生成回复")))))
         }
+        ModelThinking.applyTo(payload, config)
         val request = MimoApiConfig.applyAuthorization(Request.Builder().url(url)
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())), config.provider, config.apiKey).build()
         client.newCall(request).await { response ->

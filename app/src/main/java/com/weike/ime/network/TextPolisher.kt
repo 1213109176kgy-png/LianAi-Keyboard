@@ -358,7 +358,7 @@ class MimoTextPolisher(
         }
     }
 
-    private fun buildRequest(
+    internal fun buildRequest(
         endpoint: ModelEndpointConfig,
         systemPrompt: String,
         userText: String,
@@ -395,6 +395,7 @@ class MimoTextPolisher(
                     .put("generationConfig", JSONObject().put("temperature", temperature))
             }
         }
+        ModelThinking.applyTo(payload, endpoint)
         val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         return MimoApiConfig.applyAuthorization(
             Request.Builder().url(resolvedEndpoint).post(body), endpoint.provider, endpoint.apiKey

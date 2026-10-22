@@ -40,12 +40,14 @@ class SubscriptionViews(private val context: Context) {
     private val surface = context.getColor(R.color.weike_panel)
     private val ink = context.getColor(R.color.weike_text)
     private val muted = if (night) Color.rgb(216, 191, 201) else Color.rgb(120, 101, 111)
-    private val accent = if (night) Color.rgb(255, 157, 191) else Color.rgb(190, 48, 98)
-    private val primary = Color.rgb(205, 53, 106)
+    private val accent = if (night) Color.rgb(255, 157, 191) else Color.rgb(219, 52, 110)
+    private val primary = Color.rgb(255, 107, 157)
     private val soft = if (night) Color.rgb(68, 43, 55) else Color.rgb(255, 240, 245)
     private val border = if (night) Color.rgb(99, 65, 80) else Color.rgb(242, 221, 230)
-    private val success = if (night) Color.rgb(143, 218, 183) else Color.rgb(38, 119, 83)
-    private val successSoft = if (night) Color.rgb(41, 65, 53) else Color.rgb(235, 247, 240)
+    // Status tones follow the brand palette; green/blue variants read as a
+    // different design system next to the pink theme.
+    private val success = accent
+    private val successSoft = soft
 
     fun header(onBack: () -> Unit) = row().apply {
         addView(ImageView(context).apply {
@@ -186,7 +188,7 @@ class SubscriptionViews(private val context: Context) {
             }, lp(top = 22))
             addView(summaryRow("套餐有效期", "${plan.periodDays} 天"), lp(top = 21))
             addView(summaryRow("每日 AI 额度", if (plan.dailyQuota == 0) "不限次数" else "${plan.dailyQuota} 次"), lp(top = 16))
-            addView(summaryRow(if (free) "领取方式" else "支付方式", if (free) "免费领取" else "支付宝", if (free) success else Color.rgb(22, 119, 255)), lp(top = 16))
+            addView(summaryRow(if (free) "领取方式" else "支付方式", if (free) "免费领取" else "支付宝", accent), lp(top = 16))
             addView(divider(), lp(top = 21, height = 1))
             addView(row().apply {
                 addView(text(if (free) "本次领取" else "应付金额", 14f, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))

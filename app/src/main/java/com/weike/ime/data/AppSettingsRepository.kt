@@ -154,6 +154,7 @@ class AppSettingsRepository(private val context: Context) {
                     runCatching { CloudProvider.valueOf(prefs[asrProviderKey].orEmpty()) }
                         .getOrDefault(CloudProvider.CUSTOM)
                 ),
+                // 兼容旧版单模型配置；迁移后由 ModelAccessRouter 按业务选择通道。
                 text = ModelEndpointConfig(
                     prefs[textUrlKey].orEmpty(),
                     secrets.read(SECURE_TEXT_KEY).orEmpty(),

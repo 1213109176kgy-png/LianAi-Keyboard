@@ -147,7 +147,8 @@ data class ModelEndpointConfig(
     val url: String = "",
     val apiKey: String = "",
     val model: String = "",
-    val provider: CloudProvider = CloudProvider.CUSTOM
+    val provider: CloudProvider = CloudProvider.CUSTOM,
+    val thinkingEnabled: Boolean = false
 ) {
     fun isComplete(): Boolean = url.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
 }

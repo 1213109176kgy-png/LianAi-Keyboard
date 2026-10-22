@@ -1,5 +1,92 @@
 # Changelog
 
+## 1.5.5 integration - 2026-10-22
+
+- 整合一键截屏、九键输入、首次麦克风授权和图标安全区修复。
+- 模型通道统一为有效 VIP 优先后台模型，否则使用对应业务的自配模型；帮你回、截图识别回复和超会说独立选模。替代下方原 1.5.5 记录中的自配优先及单模型折叠方案。
+- 自配模型新增思考模式开关，按厂商协议发送，默认关闭；强制思考模型显示固定状态。保留模型库、固定底部按钮和统一配置引导弹窗。
+- 基础语音输入使用后台语音配置或自配 ASR，不参与 VIP 控制；不再向 APK 内嵌服务商密钥。
+- 记录双 GitHub 仓库同步流程，后台 admin 继续仅保留本地。
+
+## 1.5.5 - 2026-10-21
+
+### 简体中文
+
+- 修复应用图标与启动画面 Logo 被裁切的问题：自适应图标前景重新按安全区规范生成（Logo 缩至画布约 55% 居中），并清除源图灰底；桌面图标与启动画面均完整显示品牌爱心。
+- 大模型配置页精简：自定义文本模型的厂商列表收敛为智谱、千问、DeepSeek、豆包、腾讯混元五家；「读取模型」按钮移入「模型名」输入框右侧（验证码按钮样式），不再单独占一行，点击功能不变。
+- 大模型配置页简化：「自定义文本模型」区块默认折叠，点击「不想订阅？使用自定义模型」展开填写；配置过有效接口的用户进入页面自动展开。通道选择完全由自动切换策略接管，不再需要手动开关。
+- 文本 AI 通道策略上线：配置了自定义模型则优先使用、失败自动切换订阅通道；未配置则只走订阅通道。任一通道成功即返回，全部失败才提示。
+- AI 失败提示按真实状态区分：未开通显示「AI 功能还未开通」；订阅已失效提示续订或配置自定义模型；自定义模型连不通提示检查接口密钥余额；订阅额度用完且自定义也未连通时明确告知双重失败；订阅文本通道未上线时提示即将开放（帮你回可直接使用套餐内的截图识别回复）。
+- 截图识别回复改为一键截屏：点击「截图识别回复」直接弹出系统屏幕录制授权，确认后自动截取当前屏幕（自动裁掉键盘区域）并送 AI 识别，不再打开相册挑选截图。
+- 帮你回与超会说不再生成占位假回复：AI 未开通或调用失败时，显示「AI 功能还未开通」引导卡，一键跳转订阅套餐或模型配置；不再出现看似真实实则本地的固定话术。
+- 已登录用户的引导卡按真实状态区分：文本 AI 的订阅通道暂未开放时，明确提示「截图识别回复已含在套餐内，可直接使用」并提供直达按钮，不再让订阅用户误以为需要重新配置。
+- 候选栏联想词右侧按钮由展开箭头改为关闭按钮，点击即清除联想词并恢复模式切换栏；正在输入拼音时仍保留展开候选功能。
+- 语音听写在麦克风权限未授予或识别通道未配置时给出明确提示，不再静默失败。
+- 「我的」页面信息架构重排为四组：账号状态头卡（未登录点击登录、已登录点击退出）、订阅、功能与设置、支持；版本检查并入「支持」并更名为「检查更新」。
+- 所有列表条目新增浅粉圆形图标底，与首页功能卡片风格统一。
+- 意见反馈改为真实入口：弹窗展示开发者微信二维码，扫码即可反馈，不再提示「建设中」。
+- 个人中心头卡改为标准个人信息卡：未登录显示「未登录 / 点击登录或注册」；登录后显示手机号与订阅状态（未购买套餐，或「套餐名 · 到期日期 到期」），点击卡片未登录弹登录、已登录确认退出。
+- 版本更新弹窗改为品牌化样式（渐变标题栏 + 粉色按钮），对外仅显示纯版本号，不再暴露内部构建渠道与分发链路术语。
+- 「关于我们」新增版本信息与隐私政策条目；打赏区补充收款码说明文字。
+- 使用指引修正与实际设置名称不一致的描述，并补充智能标点、颜文字键、三页符号等新功能说明；指引返回按钮回到「我的」而非「关于我们」。
+- 大模型配置页重排为「AI 大模型套餐」主区块：套餐说明与「查看订阅套餐」按钮置顶，下方一行「不想订阅？使用自定义模型 ▾」折叠入口，点击展开自定义文本模型配置表单，再点收起；展开状态持久保存，已有完整配置的老用户默认展开、行为不变。
+- 「键盘效果预览」副标题改为「进入试用页体验完整键盘」；页面底部增加安全间距。
+- 键盘管理页「九宫格符号」列表改为紧凑行（48dp），消除每项占位过大的问题。
+- 键盘主标签页由「测试」更名为「键盘试用」，输入区标题改为「体验输入」。
+- 订阅页配色并入品牌粉色系：「支付宝开通」按钮改品牌粉，「免费」「生效中」由绿色改为粉色，移除蓝色支付方式文字。
+- 首页三个功能卡图标底色统一为暖玫瑰色板（品牌粉 / 品牌橙 / 玫瑰红）。
+- 设置宫格图标容器由圆角方形统一为圆形，与「我的」页、首页一致。
+- 新增统一品牌弹窗组件（渐变标题 + 白色内容区），退出登录确认与隐私政策弹窗改用该样式。
+- 键盘视觉规范统一：所有回车键（发送/换行/符号页箭头）统一为品牌粉色实心，替换原先灰字、绿色、黑灰三种混用样式。
+- Shift 与退格键图标重做为实心风格：大写键使用实心上箭头（锁定时粉底白箭头），删除键使用实心退格标签配镂空叉，与主流输入法按键图标一致，小尺寸下更饱满清晰。
+- 九键「，。?!”键智能标点：点按先上屏逗号并展开标点条，若接着选择问号/句号等其他标点，会自动替换掉预插的逗号（「你好，？」→「你好？」），不再产生双重标点；直接收起标点条则保留逗号。超会说草稿内同样生效。
+- 符号页扩充为 3 页：新增中文符号页，补齐【】《》「」『』〔〕、全角￥、破折号——、省略号……以及 ♪ ♡ ☆ ★ 等聊天常用装饰符号，翻页键在「#+= / 中文 / 123」间循环。
+- 九键新增颜文字快捷键：右侧键改为「^_^」，点按弹出顶栏颜文字条（^_^ ^o^ ^3^ >_< T_T QAQ 等），点选即上屏；左下角保留表情面板入口，不再出现两个重复的表情按键。
+- 表情键全面图标化：新增 Lucide 线性笑脸图标，替换九键 ^^ 字符与各页面 ☺ 彩色 emoji 字符。
+- 切换输入法的地球键改为 Lucide 线性图标，与麦克风等底部图标描边粗细一致。
+- 功能修饰键（123 / ABC / #@¥ / 退格 / Shift）底色由冷灰调整为暖玫瑰灰，九键功能键（拼音 / 更多 / 选拼音等）同步暖化，两套键盘修饰键色系统一。
+- 英文键盘空格键文案由 "space" 改为「空格」，中/EN 键字号增大一档。
+- 增强词典随安装包内置：首次启动自动校验并启用扩展词汇、腾讯词汇、英文混输与 Emoji，无需联网下载；万象长句增强仍为可选下载。
+- 九键新增「选拼音」音节筛选行：输入后在候选区上方横向滑动选择 ni/mi 等音节，快速缩小候选范围；退格先取消筛选再删码。
+- 九键无效按键不再把数字码带入编辑器：无法匹配的组合自动回退到上一个有效状态，组合区始终显示拼音读音。
+- 增强词典已内置启用时，设置页不再显示无效的下载按钮。
+- 修复表情面板打开时候选词残影叠加在分类栏上的显示问题。
+- 重新打开键盘时不再停留在上次会话的表情面板或标点条上，避免误触发出一串表情。
+
+### English
+
+- The trial page now checks IME readiness on tap: if the keyboard is not enabled in the system, a guided dialog offers a direct jump to system IME settings; if enabled but another IME is selected, it offers the input-method picker; once ready the keyboard opens as usual.
+- The Profile page is reorganized into four groups: a status hero card (tap to log in when signed out, tap to log out when signed in), Subscription, Features & Settings, and Support; the update check moves into Support as "Check for updates".
+- Every list row now has a soft-pink circular icon badge, matching the home page feature cards.
+- Feedback is now a real entry: a dialog shows the developer WeChat QR code for scanning, replacing the "under construction" toast.
+- The hero card is now a standard profile card: signed out shows "未登录 / 点击登录或注册"; signed in shows the phone number plus subscription state ("未购买套餐" or "plan · expires on date"). Tapping still opens the login dialog or logout confirmation.
+- The update dialog now uses the branded style (gradient header + pink button), shows plain version numbers only, and no longer exposes internal build channels or distribution jargon.
+- The About page gains version info and a privacy policy entry; the donation section describes the QR code explicitly.
+- The usage guide now matches actual settings names, documents smart punctuation / the kaomoji key / the three symbol pages, and its back button returns to Profile instead of About.
+- The model-config page is now driven by a "自定义模型" switch: off by default and shows the subscription module with a direct jump; toggled on hides the plan module and reveals the custom endpoint form. Existing users with a complete endpoint migrate to on automatically; switching off disables the custom endpoint, and the official plan channel can plug in later without further UI changes.
+- "Keyboard preview" subtitle reworded; page bottom now keeps a safe margin.
+- The nine-key symbols editor list uses compact 48dp rows instead of oversized cards.
+- The keyboard tab is renamed from "测试" to "键盘试用" ("体验输入" section).
+- Subscription colors join the brand palette: the Alipay button is brand pink, "免费"/"生效中" turn from green to pink, and the blue payment text is gone.
+- Home feature card icons share one warm-rose palette (brand pink / orange / rose red).
+- Settings grid icon badges are now circular like the Profile rows and home cards.
+- A shared branded dialog component (gradient header + white body) replaces the system AlertDialog for logout confirmation and the privacy policy.
+- Unified keyboard visual spec: every enter key (send/newline/symbols arrow) now uses the brand pink fill, replacing the previous mix of grey text, WeChat green and dark grey.
+- Shift and backspace icons redrawn as solid glyphs: the shift key uses a filled up-arrow (white on pink when caps lock is on) and the delete key a filled tag with a knocked-out X, matching mainstream IME key icons and reading much better at small sizes.
+- Smart punctuation for the nine-key "，。?!" key: tapping commits a comma and opens the strip, but picking ？/。/！ there now replaces that placeholder comma (「你好，？」→「你好？」) instead of stacking a second mark; collapsing the strip keeps the comma. Works inside the Super Say draft too.
+- Symbols spread over three pages: a new Chinese-punctuation page adds 【】《》「」『』〔〕, full-width ￥, the —— dash, …… ellipsis plus ♪ ♡ ☆ ★ chat decorations; the page key cycles through #+= / 中文 / 123.
+- New kaomoji shortcut on the nine-key: the right-middle key is now "^_^" and opens a top kaomoji bar (^_^ ^o^ ^3^ >_< T_T QAQ …), tap to insert; the emoji panel stays on the bottom-left key, removing the duplicated emoji entry.
+- Emoji keys are now proper Lucide line icons, replacing the nine-key "^^" text glyph and the colored ☺ emoji character on every layout.
+- The IME-switcher globe is now a Lucide icon whose stroke matches the mic and other bottom actions.
+- Modifier keys (123 / ABC / #@¥ / backspace / shift) switched from cool grey to a warm rose grey that fits the pink theme; nine-key function keys share the same warm system now.
+- English keyboard space bar label changed from "space" to 空格; the 中/EN key label is one step larger.
+- The enhanced dictionary now ships inside the APK: extended vocab, Tencent words, English mixing and Emoji are verified and activated offline on first use; Wanxiang remains an optional download.
+- New nine-key "select spelling" row: swipe through syllable chips (ni/mi/…) above the candidates to narrow matches; backspace clears the filter before deleting a key.
+- Invalid nine-key presses no longer leak numeric codes into the editor; unmatchable compositions fall back to the last valid state.
+- Hide the disabled download button on the enhanced-dictionary card once the bundled dictionary is active.
+- Fixed candidate residue drawing over the emoji panel category bar.
+- A reopened keyboard now lands on the letter grid instead of the leftover emoji panel or punctuation strip.
+
 ## 1.5.3 - 2026-10-08
 
 - 重整九宫格拼音与数字键盘布局，支持「123 / 拼音」往返切换。
