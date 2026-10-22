@@ -1601,7 +1601,7 @@ class MainActivity : AppCompatActivity() {
     private fun buildUserModelControls(host: LinearLayout) {
         val repository = container.settings.userModels
         val profiles = repository.all()
-        host.addView(cloudSection("我的大模型"))
+        host.addView(cloudSection("自定义模型"))
         host.addView(card().apply {
             if (profiles.isEmpty()) addView(cloudHelpText("还没有添加模型，可填写服务商、接口地址、API Key 和模型名。"))
             profiles.forEach { profile ->
@@ -1671,17 +1671,45 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildCloudConfiguration(): View = screen {
         addView(cloudSubpageHeader("大模型配置") { showPage(cloudReturnPage) })
-        addView(cloudHelpText("VIP 优先使用后台为各业务配置的官方模型。非 VIP 或该业务未配置时，使用下方所选模型。基础语音输入不受 VIP 限制。"))
+        addView(cloudSection("AI 大模型套餐"))
+        val modelsHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val customChevron = ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_lucide_chevron_down)
+            setColorFilter(getColor(R.color.weike_muted))
+        }
+
+        fun applyCustomExpanded(expanded: Boolean) {
+            customChevron.animate().rotation(if (expanded) 180f else 0f).setDuration(150).start()
+            modelsHost.visibility = if (expanded) View.VISIBLE else View.GONE
+        }
+
         addView(card(top = 12).apply {
             addView(cloudHelpText("开通 VIP 后使用后台为各项功能配置的官方模型，无需填写接口参数。"))
             addView(modelConfigurationButton("查看订阅套餐", true) { showPage(Page.SUBSCRIPTION) },
                 margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12))
+            // 折叠入口：不想订阅的用户展开自定义模型配置。
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 8)
+                setPadding(0, dp(12), 0, dp(2))
+                addView(TextView(this@MainActivity).apply {
+                    text = "不想订阅？使用自定义模型"
+                    textSize = 13f
+                    setTextColor(pagePrimary)
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(customChevron, LinearLayout.LayoutParams(dp(20), dp(20)))
+                setOnClickListener {
+                    val expanded = modelsHost.visibility == View.VISIBLE
+                    applyCustomExpanded(!expanded)
+                }
+            })
         })
-        val modelsHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
         addView(modelsHost)
         lifecycleScope.launch {
             container.settings.cloudApiSettings.first() // 迁移旧版自配模型，保留原参数和密钥。
             buildUserModelControls(modelsHost)
+            // 配置过自定义模型的用户进入页面自动展开。
+            if (container.settings.userModels.all().isNotEmpty()) applyCustomExpanded(true)
         }
         addView(cloudSection("帮你回提示词"))
         addView(card().apply {
