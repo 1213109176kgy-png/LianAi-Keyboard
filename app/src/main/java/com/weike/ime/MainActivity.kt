@@ -1606,17 +1606,14 @@ class MainActivity : AppCompatActivity() {
             if (profiles.isEmpty()) {
                 // 空态直接内联表单：免去「点按钮 → 弹窗」的中转，填完即保存为第一个模型。
                 addView(cloudHelpText("填写服务商与接口参数，保存后即可在帮你回、截图识别、超会说中使用。"))
-                val nameInput = modelViews.field("配置名称（如：我的 DeepSeek）").apply {
-                    layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 10)
-                }
                 val inlineFooter = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-                addView(nameInput)
                 addView(providerConfigurationCard(
                     isAsr = false,
                     load = { ModelEndpointConfig() },
                     loadProvider = { CloudProvider.CUSTOM },
                     save = { config, provider ->
-                        val finalName = nameInput.text.toString().trim().ifBlank { "自定义模型" }
+                        // 名称自动按「厂商 · 模型」生成，少填一项。
+                        val finalName = "${provider.displayName} · ${config.model.ifBlank { "自定义模型" }}"
                         val profile = repository.save(null, finalName, config.copy(provider = provider))
                         // 首个模型保存后自动绑定全部业务，免去手动逐个选择的隐藏门槛。
                         com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
@@ -2783,8 +2780,9 @@ class MainActivity : AppCompatActivity() {
                 CloudProvider.CUSTOM
             )
         } else {
-            // 文本场景收敛到主流五家，降低选择成本。
+            // 文本场景收敛到主流五家 + 自定义模型（可选回，作为默认项）。
             listOf(
+                CloudProvider.CUSTOM,
                 CloudProvider.ZHIPU,
                 CloudProvider.QWEN,
                 CloudProvider.DEEPSEEK,
