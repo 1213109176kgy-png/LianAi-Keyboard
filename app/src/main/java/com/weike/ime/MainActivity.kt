@@ -1603,31 +1603,57 @@ class MainActivity : AppCompatActivity() {
         val profiles = repository.all()
         host.addView(cloudSection("自定义模型"))
         host.addView(card().apply {
-            if (profiles.isEmpty()) addView(cloudHelpText("还没有添加模型，可填写服务商、接口地址、API Key 和模型名。"))
-            profiles.forEach { profile ->
-                addView(actionRow(profile.name, "${profile.endpoint.provider.displayName} · ${profile.endpoint.model}") { showUserModelEditor(profile) })
-            }
-            addView(modelConfigurationButton("添加大模型", true) { showUserModelEditor(null) }.apply {
-                layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
-            })
-        })
-        com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
-            val selected = profiles.find { it.id == repository.selectedId(slot) }
-            host.addView(cloudSection(slot.title))
-            host.addView(card().apply {
-                addView(actionRow("自配模型", selected?.name ?: "未配置，点击选择模型") {
-                    if (profiles.isEmpty()) { showUserModelEditor(null); return@actionRow }
-                    val labels = arrayOf("不配置") + profiles.map { "${it.name}\n${it.endpoint.model}" }
-                    val selectedIndex = profiles.indexOfFirst { it.id == selected?.id } + 1
-                    modelViews.choose("${slot.title}使用的模型", "选择后立即生效，可随时切换或取消配置。", labels.toList(), selectedIndex) { index ->
-                        repository.select(slot, if (index == 0) "" else profiles[index - 1].id)
-                        showPage(Page.CLOUD)
-                    }
+            if (profiles.isEmpty()) {
+                // 空态直接内联表单：免去「点按钮 → 弹窗」的中转，填完即保存为第一个模型。
+                addView(cloudHelpText("填写服务商与接口参数，保存后即可在帮你回、截图识别、超会说中使用。"))
+                val nameInput = modelViews.field("配置名称（如：我的 DeepSeek）").apply {
+                    layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44), top = 10)
+                }
+                val inlineFooter = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+                addView(nameInput)
+                addView(providerConfigurationCard(
+                    isAsr = false,
+                    load = { ModelEndpointConfig() },
+                    loadProvider = { CloudProvider.CUSTOM },
+                    save = { config, provider ->
+                        val finalName = nameInput.text.toString().trim().ifBlank { "自定义模型" }
+                        repository.save(null, finalName, config.copy(provider = provider))
+                    },
+                    test = { config -> MimoTextPolisher(endpointProvider = { config }).testConnection() },
+                    actionsHost = inlineFooter
+                ).apply {
+                    background = null
+                    setPadding(0, 0, 0, 0)
                 })
-                addView(cloudHelpText(if (slot == com.weike.ime.data.UserModelSlot.VISION)
-                    "截图识别需要所选模型支持图片输入。非 VIP 或官方模型未配置时使用此模型。"
-                    else "可选择上方添加的任意文本模型。VIP 使用对应后台模型，其他情况使用此模型。"))
-            })
+                addView(inlineFooter)
+            } else {
+                profiles.forEach { profile ->
+                    addView(actionRow(profile.name, "${profile.endpoint.provider.displayName} · ${profile.endpoint.model}") { showUserModelEditor(profile) })
+                }
+                addView(modelConfigurationButton("添加大模型", true) { showUserModelEditor(null) }.apply {
+                    layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
+                })
+            }
+        })
+        if (profiles.isNotEmpty()) {
+            com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
+                val selected = profiles.find { it.id == repository.selectedId(slot) }
+                host.addView(cloudSection(slot.title))
+                host.addView(card().apply {
+                    addView(actionRow("自配模型", selected?.name ?: "未配置，点击选择模型") {
+                        if (profiles.isEmpty()) { showUserModelEditor(null); return@actionRow }
+                        val labels = arrayOf("不配置") + profiles.map { "${it.name}\n${it.endpoint.model}" }
+                        val selectedIndex = profiles.indexOfFirst { it.id == selected?.id } + 1
+                        modelViews.choose("${slot.title}使用的模型", "选择后立即生效，可随时切换或取消配置。", labels.toList(), selectedIndex) { index ->
+                            repository.select(slot, if (index == 0) "" else profiles[index - 1].id)
+                            showPage(Page.CLOUD)
+                        }
+                    })
+                    addView(cloudHelpText(if (slot == com.weike.ime.data.UserModelSlot.VISION)
+                        "截图识别需要所选模型支持图片输入。非 VIP 或官方模型未配置时使用此模型。"
+                        else "可选择上方添加的任意文本模型。VIP 使用对应后台模型，其他情况使用此模型。"))
+                })
+            }
         }
     }
 

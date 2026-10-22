@@ -1268,71 +1268,44 @@ class WeikeKeyboardView(
         }
     }
 
-    /** AI 失败引导卡：aiGuide 形如 "reply:none"/"polish:sub_expired"。
-     *  variant 由服务端通道策略给出，文案与按钮按真实失败原因区分。 */
+    /** AI 失败引导卡：aiGuide 形如 "reply|<路由层错误说明>"。
+     *  画布直接绘制（非系统弹窗），任何 App 内唤起键盘均可显示。 */
     private fun drawAiGuideCard(canvas: Canvas) {
-        val mode = aiGuide.orEmpty().substringBefore(':')
-        val variant = aiGuide.orEmpty().substringAfter(':', "none")
+        val mode = aiGuide.orEmpty().substringBefore('|')
+        val message = aiGuide.orEmpty().substringAfter('|', "")
+        // 按路由层（ModelAccessRouter）的真实失败原因归类到差异化文案。
+        val variant = when {
+            message.contains("请开通 VIP") -> "none"
+            message.contains("尚未配置官方模型") -> "vip_no_model"
+            message.contains("暂时无法获取") || message.contains("网络") -> "service_error"
+            message.contains("登录账号已切换") -> "service_error"
+            else -> "service_error"
+        }
         val card = RectF(dp(5), dp(56), width - dp(5), contentBottom() - dp(10))
         rounded(canvas, card, dp(16), cardBg)
 
         val (title, line1, line2, buttons) = when (variant) {
+            "vip_no_model" -> Triple4(
+                if (mode == "reply") "帮你回还未绑定模型" else "超会说还未绑定模型",
+                message,
+                "可在下方选择已添加的模型，或开通 VIP 使用官方模型",
+                listOf(
+                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, true),
+                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
+                )
+            )
             "service_error" -> Triple4(
                 "模型服务暂不可用",
-                "请检查网络与模型配置后重试",
+                message.ifBlank { "请检查网络与模型配置后重试" },
                 "可在 App 中查看订阅与自配模型设置",
                 listOf(
                     AiGuideButton("检查配置", { actions.openAiSetup("CLOUD") }, true),
                     AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
                 )
             )
-            "sub_expired" -> Triple4(
-                "订阅套餐已失效",
-                "续订套餐，或配置自定义模型继续使用",
-                "配置自定义模型后可自动切换使用",
-                listOf(
-                    AiGuideButton("去续订", { actions.openAiSetup("SUBSCRIPTION") }, true),
-                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, false)
-                )
-            )
-            "custom_down" -> Triple4(
-                "自定义模型无法连通",
-                "请检查接口地址、密钥与账户余额",
-                "也可开通订阅套餐，由官方通道供能",
-                listOf(
-                    AiGuideButton("检查配置", { actions.openAiSetup("CLOUD") }, true),
-                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
-                )
-            )
-            "sub_quota" -> Triple4(
-                "订阅套餐额度已用完",
-                "已自动尝试自定义模型通道也未成功",
-                "请续订套餐，或检查自定义模型配置",
-                listOf(
-                    AiGuideButton("去续订", { actions.openAiSetup("SUBSCRIPTION") }, true),
-                    AiGuideButton("检查配置", { actions.openAiSetup("CLOUD") }, false)
-                )
-            )
-            "sub_pending" -> if (mode == "reply") Triple4(
-                "文本 AI 订阅通道即将开放",
-                "截图识别回复已含在你的套餐内，可直接使用",
-                "也可配置自己的模型接口，费用走你的密钥",
-                listOf(
-                    AiGuideButton("截图识别回复", { actions.screenshotReply() }, true),
-                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, false)
-                )
-            ) else Triple4(
-                "文本优化订阅通道即将开放",
-                "配置自己的模型接口后即可立即使用",
-                "购买套餐后此功能也会自动可用",
-                listOf(
-                    AiGuideButton("配置模型", { actions.openAiSetup("CLOUD") }, true),
-                    AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, false)
-                )
-            )
             else -> Triple4(
                 "AI 功能还未开通",
-                "开通订阅套餐，或配置自己的模型接口",
+                message.ifBlank { "开通订阅套餐，或配置自己的模型接口" },
                 "两种方式二选一，语音识别已内置无需配置",
                 listOf(
                     AiGuideButton("订阅套餐", { actions.openAiSetup("SUBSCRIPTION") }, true),

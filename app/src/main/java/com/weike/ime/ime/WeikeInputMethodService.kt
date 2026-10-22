@@ -180,21 +180,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     // Unlike pinyinBuffer this keeps the actual decoder code. They differ for T9:
     // the editor displays "ni" while the decoder must retain "64".
     private var pinyinRawBuffer = ""
-    // "reply" = 帮你回 needs setup, "polish" = 超会说 needs setup; null = off.
+    // AI 失败引导卡："reply|<路由层差异化的错误说明>"；null = 不显示。
     private var aiGuide: String? = null
-    /** Use the same per-business VIP/local routing for the new failure guide cards. */
-    private suspend fun resolveAiOptions(scene: String, content: String, relation: String): Pair<List<String>?, String?> {
-        val result = if (scene == "reply") polisher.suggestReplies(content)
-            else polisher.suggestPolishes(content, relation)
-        result.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it to null }
-        val error = result.exceptionOrNull()
-        if (error is CancellationException) throw error
-        if (error is ModelSetupRequiredException) {
-            showModelSetupDialog(error.message.orEmpty())
-            return null to "none"
-        }
-        return null to "service_error"
-    }
 
     private var pinyinCandidates: List<PinyinCandidate> = emptyList()
     private var spellingOptions: List<String> = emptyList()
@@ -1533,24 +1520,26 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         voiceState = VoiceUiState.Idle
         render()
         serviceScope.launch {
-            val (options, variant) = resolveAiOptions("reply", source, "通用")
-            replyLoading = false
-            if (options != null) {
+            polisher.suggestReplies(source).onSuccess {
+                replyLoading = false
                 aiGuide = null
-                replyOptions = options
-                replyEmotion = when {
-                    Regex("难过|伤心|生气|失望|讨厌|不开心").containsMatchIn(source) -> "需要安慰"
-                    Regex("吗|呢|一起|想请|有空|期待").containsMatchIn(source) -> "开心期待"
-                    else -> "友好交流"
+                replyOptions = it
+                render()
+            }.onFailure { error ->
+                replyLoading = false
+                Log.w(TAG, "Reply suggestions unavailable; showing setup guide", error)
+                // 未配置类（ModelSetupRequiredException）由 withModelAccess 弹出
+                // 「选择 AI 使用方式」弹窗；其余错误用画布引导卡提示。
+                if (error is ModelSetupRequiredException) {
+                    showModelSetupDialog(error.message.orEmpty())
+                } else {
+                    aiGuide = "reply|" + (error.message ?: "AI 功能暂不可用，请检查网络后重试")
                 }
-            } else {
-                Log.w(TAG, "Reply suggestions unavailable; variant=$variant")
-                aiGuide = "reply:$variant"
                 replyOptions = emptyList()
                 replyEmotion = ""
+                voiceState = VoiceUiState.Idle
+                render()
             }
-            voiceState = VoiceUiState.Idle
-            render()
         }
     }
 
@@ -1594,12 +1583,24 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             aiGuide = null
             render()
             serviceScope.launch {
-                val (options, variant) = resolveAiOptions("polish", source, polishRelation)
-                polishLoading = false
-                aiGuide = if (options == null) "polish:$variant" else null
-                polishOptions = options.orEmpty()
-                voiceState = VoiceUiState.Idle
-                render()
+                polisher.suggestPolishes(source, polishRelation).onSuccess { options ->
+                    polishLoading = false
+                    aiGuide = null
+                    polishOptions = options
+                    voiceState = VoiceUiState.Idle
+                    render()
+                }.onFailure { error ->
+                    polishLoading = false
+                    Log.w(TAG, "Polish suggestions unavailable; showing setup guide", error)
+                    if (error is ModelSetupRequiredException) {
+                        showModelSetupDialog(error.message.orEmpty())
+                    } else {
+                        aiGuide = "polish|" + (error.message ?: "AI 功能暂不可用，请检查网络后重试")
+                    }
+                    polishOptions = emptyList()
+                    voiceState = VoiceUiState.Idle
+                    render()
+                }
             }
         }
     }
