@@ -1594,6 +1594,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val modelViews by lazy { ModelConfigurationViews(this) }
+    /** 自定义模型区的双标签，折叠行展开时强制回到「多模态模型」。 */
+    private var userModelTabs: SegmentedControl? = null
 
     private fun modelConfigurationButton(label: String, filled: Boolean, action: () -> Unit) =
         modelViews.button(label, filled, action = action)
@@ -1609,10 +1611,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
+        // 每次展开都强制回到「多模态模型」标签，保证默认落点一致。
         host.addView(SegmentedControl(this@MainActivity, listOf("多模态模型", "ASR 模型"), 0) { index ->
             multimodalHost.visibility = if (index == 0) View.VISIBLE else View.GONE
             asrHost.visibility = if (index == 1) View.VISIBLE else View.GONE
-        }.apply {
+        }.also { userModelTabs = it }.apply {
             // 高度固定 46dp：WRAP_CONTENT 会让自绘控件量出过矮的高度。
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(46)
@@ -1772,6 +1775,7 @@ class MainActivity : AppCompatActivity() {
                 addView(customChevron, LinearLayout.LayoutParams(dp(20), dp(20)))
                 setOnClickListener {
                     val expanded = modelsHost.visibility == View.VISIBLE
+                    if (!expanded) userModelTabs?.setSelected(0) // 展开时回到「多模态模型」标签
                     applyCustomExpanded(!expanded)
                 }
             })
