@@ -1602,10 +1602,25 @@ class MainActivity : AppCompatActivity() {
         val repository = container.settings.userModels
         val profiles = repository.all()
         host.addView(cloudSection("自定义模型"))
-        host.addView(card().apply {
+
+        // 双 Tab：多模态模型（文本+截图识别共用）与 ASR 模型（语音转文字）。
+        val multimodalHost = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        val asrHost = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        host.addView(SegmentedControl(this@MainActivity, listOf("多模态模型", "ASR 模型"), 0) { index ->
+            multimodalHost.visibility = if (index == 0) View.VISIBLE else View.GONE
+            asrHost.visibility = if (index == 1) View.VISIBLE else View.GONE
+        }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 10))
+        host.addView(multimodalHost)
+        host.addView(asrHost)
+
+        // Tab 1：多模态模型——单模型自动服务帮你回/截图识别/超会说。
+        multimodalHost.addView(card().apply {
             if (profiles.isEmpty()) {
-                // 空态直接内联表单：免去「点按钮 → 弹窗」的中转，填完即保存为第一个模型。
-                addView(cloudHelpText("填写服务商与接口参数，保存后即可在帮你回、截图识别、超会说中使用。"))
+                // 空态直接内联表单：免去「点按钮 → 弹窗」的中转，填完即保存。
+                addView(cloudHelpText("填写服务商与接口参数。保存后自动用于帮你回、截图识别回复和超会说。"))
                 val inlineFooter = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
                 addView(providerConfigurationCard(
                     isAsr = false,
@@ -1615,7 +1630,7 @@ class MainActivity : AppCompatActivity() {
                         // 名称自动按「厂商 · 模型」生成，少填一项。
                         val finalName = "${provider.displayName} · ${config.model.ifBlank { "自定义模型" }}"
                         val profile = repository.save(null, finalName, config.copy(provider = provider))
-                        // 首个模型保存后自动绑定全部业务，免去手动逐个选择的隐藏门槛。
+                        // 单模型语义：自动绑定全部业务，无需用户逐个选择。
                         com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
                             repository.select(slot, profile.id)
                         }
@@ -1628,34 +1643,48 @@ class MainActivity : AppCompatActivity() {
                 })
                 addView(inlineFooter)
             } else {
+                addView(cloudHelpText("此模型同时用于帮你回、截图识别回复和超会说。点击可修改参数或删除。"))
                 profiles.forEach { profile ->
                     addView(actionRow(profile.name, "${profile.endpoint.provider.displayName} · ${profile.endpoint.model}") { showUserModelEditor(profile) })
                 }
-                addView(modelConfigurationButton("添加大模型", true) { showUserModelEditor(null) }.apply {
-                    layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12)
-                })
             }
         })
-        if (profiles.isNotEmpty()) {
-            com.weike.ime.data.UserModelSlot.entries.forEach { slot ->
-                val selected = profiles.find { it.id == repository.selectedId(slot) }
-                host.addView(cloudSection(slot.title))
-                host.addView(card().apply {
-                    addView(actionRow("自配模型", selected?.name ?: "未配置，点击选择模型") {
-                        if (profiles.isEmpty()) { showUserModelEditor(null); return@actionRow }
-                        val labels = arrayOf("不配置") + profiles.map { "${it.name}\n${it.endpoint.model}" }
-                        val selectedIndex = profiles.indexOfFirst { it.id == selected?.id } + 1
-                        modelViews.choose("${slot.title}使用的模型", "选择后立即生效，可随时切换或取消配置。", labels.toList(), selectedIndex) { index ->
-                            repository.select(slot, if (index == 0) "" else profiles[index - 1].id)
-                            showPage(Page.CLOUD)
-                        }
-                    })
-                    addView(cloudHelpText(if (slot == com.weike.ime.data.UserModelSlot.VISION)
-                        "截图识别需要所选模型支持图片输入。非 VIP 或官方模型未配置时使用此模型。"
-                        else "可选择上方添加的任意文本模型。VIP 使用对应后台模型，其他情况使用此模型。"))
-                })
+
+        // Tab 2：ASR 模型——语音输入（录音转文字）专用，固定小米 MiMo。
+        val asrKeyInput = modelViews.field("输入小米 MiMo API Key").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            layoutParams = margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+        }
+        lifecycleScope.launch {
+            val asr = container.settings.cloudApiSettings.first().asr
+            if (asr.provider == CloudProvider.XIAOMI_MIMO && asr.apiKey.isNotBlank()) {
+                asrKeyInput.setText(asr.apiKey)
+                asrKeyInput.setSelection(asr.apiKey.length)
             }
         }
+        asrHost.addView(card().apply {
+            addView(cloudHelpText("语音输入（录音转文字）使用小米 MiMo 语音识别。前往小米 MiMo 开放平台创建 API Key 后填入即可。"))
+            addView(asrKeyInput, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
+            addView(modelConfigurationButton("保存", true) {
+                val key = asrKeyInput.text.toString().trim()
+                if (key.isBlank()) {
+                    Toast.makeText(this@MainActivity, "请填写 API Key", Toast.LENGTH_SHORT).show()
+                    return@modelConfigurationButton
+                }
+                lifecycleScope.launch {
+                    container.settings.saveAsrApi(
+                        ModelEndpointConfig(
+                            url = "https://api.xiaomimimo.com/v1",
+                            apiKey = key,
+                            model = "mimo-v2.5-asr",
+                            provider = CloudProvider.XIAOMI_MIMO
+                        ),
+                        CloudProvider.XIAOMI_MIMO
+                    )
+                    Toast.makeText(this@MainActivity, "ASR 模型已保存，语音输入已就绪", Toast.LENGTH_SHORT).show()
+                }
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12))
+        })
     }
 
     private fun showUserModelEditor(profile: com.weike.ime.data.UserModelProfile?) {
