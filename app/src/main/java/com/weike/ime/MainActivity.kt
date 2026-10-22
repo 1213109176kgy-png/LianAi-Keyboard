@@ -1612,7 +1612,12 @@ class MainActivity : AppCompatActivity() {
         host.addView(SegmentedControl(this@MainActivity, listOf("多模态模型", "ASR 模型"), 0) { index ->
             multimodalHost.visibility = if (index == 0) View.VISIBLE else View.GONE
             asrHost.visibility = if (index == 1) View.VISIBLE else View.GONE
-        }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 10))
+        }.apply {
+            // 高度固定 46dp：WRAP_CONTENT 会让自绘控件量出过矮的高度。
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)
+            ).apply { marginStart = dp(6); marginEnd = dp(6); bottomMargin = dp(10) }
+        })
         host.addView(multimodalHost)
         host.addView(asrHost)
 
@@ -1665,25 +1670,29 @@ class MainActivity : AppCompatActivity() {
         asrHost.addView(card().apply {
             addView(cloudHelpText("语音输入（录音转文字）使用小米 MiMo 语音识别。前往小米 MiMo 开放平台创建 API Key 后填入即可。"))
             addView(asrKeyInput, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 10))
-            addView(modelConfigurationButton("保存", true) {
-                val key = asrKeyInput.text.toString().trim()
-                if (key.isBlank()) {
-                    Toast.makeText(this@MainActivity, "请填写 API Key", Toast.LENGTH_SHORT).show()
-                    return@modelConfigurationButton
-                }
-                lifecycleScope.launch {
-                    container.settings.saveAsrApi(
-                        ModelEndpointConfig(
-                            url = "https://api.xiaomimimo.com/v1",
-                            apiKey = key,
-                            model = "mimo-v2.5-asr",
-                            provider = CloudProvider.XIAOMI_MIMO
-                        ),
-                        CloudProvider.XIAOMI_MIMO
-                    )
-                    Toast.makeText(this@MainActivity, "ASR 模型已保存，语音输入已就绪", Toast.LENGTH_SHORT).show()
-                }
-            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(48), top = 12))
+            addView(LinearLayout(this@MainActivity).apply {
+                gravity = Gravity.END
+                // 半宽居右：与测试连接/保存配置的双按钮布局同构，不再全宽占屏。
+                addView(modelConfigurationButton("保存", true) {
+                    val key = asrKeyInput.text.toString().trim()
+                    if (key.isBlank()) {
+                        Toast.makeText(this@MainActivity, "请填写 API Key", Toast.LENGTH_SHORT).show()
+                        return@modelConfigurationButton
+                    }
+                    lifecycleScope.launch {
+                        container.settings.saveAsrApi(
+                            ModelEndpointConfig(
+                                url = "https://api.xiaomimimo.com/v1",
+                                apiKey = key,
+                                model = "mimo-v2.5-asr",
+                                provider = CloudProvider.XIAOMI_MIMO
+                            ),
+                            CloudProvider.XIAOMI_MIMO
+                        )
+                        Toast.makeText(this@MainActivity, "ASR 模型已保存，语音输入已就绪", Toast.LENGTH_SHORT).show()
+                    }
+                }.apply { layoutParams = LinearLayout.LayoutParams(dp(140), dp(48)) })
+            }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
         })
     }
 
