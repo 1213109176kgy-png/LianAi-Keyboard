@@ -1368,17 +1368,21 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         }
     }
 
+    /** 截图识别回复：校验模型通道 → 相册选聊天截图 → 视觉模型 → 多条场景化回复。 */
     override fun screenshotReply() {
         if (sensitiveField || mode != KeyboardMode.ASK) return
         serviceScope.launch {
             try {
                 modelAccess.route(ModelFeature.VISION)
-                startActivity(android.content.Intent(this@WeikeInputMethodService, com.weike.ime.ScreenCaptureActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    .putExtra(com.weike.ime.ScreenCaptureActivity.EXTRA_CROP_BOTTOM, keyboard.height))
+                // 输入法无法直接弹相册，经应用内选图页中转（一键截屏与本应用
+                // 任务切换打架会截到自己，已废弃）。
+                startActivity(
+                    android.content.Intent(this@WeikeInputMethodService, com.weike.ime.ImagePickerActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             } catch (error: CancellationException) { throw error }
               catch (error: Exception) {
-                voiceState = VoiceUiState.Error(error.message ?: "无法启动截屏")
+                voiceState = VoiceUiState.Error(error.message ?: "无法打开相册")
                 if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
                 render()
             }

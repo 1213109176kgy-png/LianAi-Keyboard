@@ -56,6 +56,12 @@ class ImagePickerActivity : AppCompatActivity() {
         }
     }
 
+    /** 放弃选图同样退回聊天界面，而不是落在同任务的主页面上。 */
+    override fun onBackPressed() {
+        moveTaskToBack(true)
+        finish()
+    }
+
     private fun loadGallery() {
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
@@ -148,11 +154,20 @@ class ImagePickerActivity : AppCompatActivity() {
                         frame.setOnClickListener(
                             View.OnClickListener {
                                 WeikeInputMethodService.pendingImageUri = uri
-                                sendBroadcast(
-                                    Intent(WeikeInputMethodService.ACTION_IMAGE_PICKED)
-                                        .setPackage(packageName)
-                                )
+                                // 本页与主页面同任务：直接 finish 会把栈顶留成主页面，
+                                // 用户看到的是"跳回了恋爱键盘"。退回后台让微信/短信
+                                // 回到前台，键盘随后在聊天界面上方弹出。
+                                moveTaskToBack(true)
                                 finish()
+                                // 广播是异步投递的，直接发会和任务切换引发的输入会话
+                                // 重启赛跑，识别状态会被 onStartInput 的模式重置冲掉；
+                                // 等聊天应用的输入会话稳定后再通知 IME 识别。
+                                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                    sendBroadcast(
+                                        Intent(WeikeInputMethodService.ACTION_IMAGE_PICKED)
+                                            .setPackage(packageName)
+                                    )
+                                }, 500)
                             }
                         )
                         thread(name = "thumb-load") {
