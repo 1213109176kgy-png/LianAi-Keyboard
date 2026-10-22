@@ -32,8 +32,8 @@ android {
         // This product is based on the current Vertick IME v1.4.3 release.
         // Keep the upstream-compatible version so the built-in release checker
         // does not report a false update against the exact same baseline.
-        versionCode = 35
-        versionName = "1.5.5"
+        versionCode = 36
+        versionName = "1.5.6"
         ndk { abiFilters += "arm64-v8a" }
     }
 
