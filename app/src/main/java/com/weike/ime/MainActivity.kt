@@ -44,7 +44,6 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.weike.ime.ui.SubscriptionViews
 import com.weike.ime.ui.ModelConfigurationViews
@@ -81,7 +80,6 @@ import com.weike.ime.network.UserAuthClient
 import com.weike.ime.network.SubscriptionClient
 import com.weike.ime.network.SubscriptionPlan
 import com.weike.ime.network.SubscriptionApiException
-import java.io.File
 import kotlinx.coroutines.Job
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -2527,13 +2525,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(getColor(R.color.weike_muted))
             visibility = View.GONE
         }
-        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 10_000
-            progress = 0
-            visibility = View.GONE
-        }
         val primary = compactFormActionButton("检查更新", true) { }
-        var downloadedFile: File? = null
 
         fun renderUpdate(update: UpdateClient.UpdateInfo) {
             status.text = "当前版本：$appVersionName\n发现新版本：${displayVersionName(update.versionName)}"
@@ -2546,58 +2538,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        fun installApk(file: File) {
-            if (!packageManager.canRequestPackageInstalls()) {
-                status.text = "当前版本：$appVersionName\n下载完成。请先允许本应用安装未知应用，授权后回来再次点击按钮。"
-                primary.isEnabled = true
-                primary.text = "去授权"
-                primary.setOnClickListener {
-                    runCatching {
-                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-                    }
-                }
-                return
-            }
-            status.text = "当前版本：$appVersionName\n下载完成，请在系统安装界面确认更新。"
-            runCatching {
-                val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
-                startActivity(Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                })
-            }.onFailure { Toast.makeText(this@MainActivity, "无法启动系统安装器", Toast.LENGTH_SHORT).show() }
-        }
+        lateinit var dialog: android.app.Dialog
 
-        fun bindDownload(update: UpdateClient.UpdateInfo) {
+        fun bindDownloadPage(update: UpdateClient.UpdateInfo) {
             primary.isEnabled = true
-            primary.text = "下载并安装"
+            primary.text = "前往浏览器下载"
             primary.setOnClickListener {
-                val existing = downloadedFile
-                if (existing?.isFile == true) {
-                    installApk(existing)
-                    return@setOnClickListener
-                }
-                primary.isEnabled = false
-                primary.text = "下载中..."
-                progress.visibility = View.VISIBLE
-                progress.progress = 0
-                status.text = "当前版本：$appVersionName\n正在下载 ${update.versionName}..."
-                val target = File(getExternalFilesDir("updates"), "lianai-${update.versionName}.apk")
-                lifecycleScope.launch {
-                    UpdateClient().downloadApk(update, target) { p ->
-                        runOnUiThread {
-                            progress.progress = (p.fraction * 10_000).roundToInt()
-                            status.text = "当前版本：$appVersionName\n正在下载 ${(p.fraction * 100).roundToInt()}%"
-                        }
-                    }.onSuccess { file ->
-                        downloadedFile = file
-                        progress.visibility = View.GONE
-                        installApk(file)
-                    }.onFailure { error ->
-                        progress.visibility = View.GONE
-                        status.text = "当前版本：$appVersionName\n\n下载失败：${error.message ?: "网络不可用"}"
-                        bindDownload(update)
-                    }
+                dialog.dismiss()
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UpdateClient.DOWNLOAD_PAGE_URL)))
+                    Toast.makeText(this@MainActivity, "已在浏览器打开下载页，请在页面中下载并安装新版本", Toast.LENGTH_LONG).show()
+                }.onFailure {
+                    Toast.makeText(this@MainActivity, "无法打开浏览器：${it.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -2617,10 +2569,8 @@ class MainActivity : AppCompatActivity() {
                                 status.text = "当前版本：$appVersionName\n\n已是最新版本。"
                                 bindCheck()
                             } else {
-                                downloadedFile = null
-                                progress.visibility = View.GONE
                                 renderUpdate(update)
-                                bindDownload(update)
+                                bindDownloadPage(update)
                             }
                         }
                         .onFailure { error ->
@@ -2638,15 +2588,14 @@ class MainActivity : AppCompatActivity() {
             bindCheck()
         } else {
             renderUpdate(known)
-            bindDownload(known)
+            bindDownloadPage(known)
         }
         content.addView(status, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 6, bottom = 10))
         content.addView(notes, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 12))
-        content.addView(progress, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(8), bottom = 12))
         content.addView(primary, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
         // Themed shell matching the login dialog instead of the system
         // AlertDialog, whose default styling clashed with the pink theme.
-        val dialog = android.app.Dialog(this)
+        dialog = android.app.Dialog(this)
         val radius = dp(22).toFloat()
         val header = android.widget.FrameLayout(this).apply {
             background = GradientDrawable(

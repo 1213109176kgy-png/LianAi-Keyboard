@@ -3,7 +3,6 @@ package com.weike.ime.network
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 
 class UpdateClientTest {
     private val client = UpdateClient()
@@ -25,7 +24,14 @@ class UpdateClientTest {
         assertEquals(34L, info.versionCode)
         assertEquals("1.5.4", info.versionName)
         assertEquals("修复若干问题", info.notes)
-        assertEquals(58490200L, info.sizeBytes)
+    }
+
+    @Test
+    fun downloadFieldsAreOptional() {
+        // 浏览器下载方案：apkUrl/sha256/sizeBytes 不再参与客户端逻辑，缺省也能解析。
+        val info = client.parseUpdateInfo("""{"versionCode":37,"versionName":"1.5.7","notes":"x"}""")
+        assertEquals(37L, info.versionCode)
+        assertEquals("1.5.7", info.versionName)
     }
 
     @Test
@@ -33,28 +39,5 @@ class UpdateClientTest {
         assertFailsWith<IllegalArgumentException> {
             client.parseUpdateInfo("""{"apkUrl":"https://example.com/a.apk","sha256":"${"a".repeat(64)}"}""")
         }
-    }
-
-    @Test
-    fun manifestWithoutChecksumIsRejected() {
-        assertFailsWith<IllegalArgumentException> {
-            client.parseUpdateInfo("""{"versionCode":34,"versionName":"1.5.4","apkUrl":"https://example.com/a.apk"}""")
-        }
-    }
-
-    @Test
-    fun manifestWithPlainHttpApkUrlIsRejected() {
-        assertFailsWith<IllegalArgumentException> {
-            client.parseUpdateInfo(
-                """{"versionCode":34,"versionName":"1.5.4","apkUrl":"http://example.com/a.apk","sha256":"${"a".repeat(64)}"}"""
-            )
-        }
-    }
-
-    @Test
-    fun progressFractionStaysWithinBounds() {
-        assertEquals(0f, UpdateClient.DownloadProgress(0, 100).fraction)
-        assertTrue(UpdateClient.DownloadProgress(50, 100).fraction > .49f)
-        assertEquals(1f, UpdateClient.DownloadProgress(150, 100).fraction)
     }
 }
