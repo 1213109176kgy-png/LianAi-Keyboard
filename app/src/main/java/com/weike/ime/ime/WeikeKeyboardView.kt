@@ -2200,23 +2200,28 @@ class WeikeKeyboardView(
         val enter = RectF(width - edge - controlWidth, y, width - edge, y + keyHeight)
         val deleteWidth = dp(43)
         val delete = RectF(enter.left - dp(7) - deleteWidth, y, enter.left - dp(7), y + keyHeight)
-        // 原左下角 ABC（回字母走底部"返回拼音"即可）与符号分类键合并为一个宽键：
-        // 标签直说下一组是什么，循环 数字 → 英文 → 中文，用户不用猜窄键在切什么。
-        val switcher = RectF(edge, y, edge + controlWidth + dp(7) + pageKeyWidth, y + keyHeight)
-        val space = RectF(switcher.right + dp(7), y, delete.left - dp(7), y + keyHeight)
-        key(canvas, switcher)
+        // 符号分组翻页器：一个宽键划三个点击区，‹ 上一组 / 页码 / › 下一组，
+        // 首尾循环。页码告知共几组与当前位置，符号本身自解释，无需文字说明。
+        val pager = RectF(edge, y, edge + controlWidth + dp(7) + pageKeyWidth, y + keyHeight)
+        val space = RectF(pager.right + dp(7), y, delete.left - dp(7), y + keyHeight)
+        key(canvas, pager)
         key(canvas, space)
         key(canvas, delete)
         rounded(canvas, enter, dp(10), if (isPressed(enter)) pressedKey else accent)
-        centeredLabel(
-            canvas,
-            when (symbolsPage) { 0 -> "切换英文符号"; 1 -> "切换中文符号"; else -> "切换数字符号" },
-            switcher, 17f, white, Paint.Align.CENTER
-        )
+        centeredLabel(canvas, "${symbolsPage + 1}/${symbolPages.size}", pager, 16f, white, Paint.Align.CENTER)
+        lucide(canvas, R.drawable.ic_lucide_chevron_left, pager.left + dp(24), pager.centerY(), dp(20), white)
+        lucide(canvas, R.drawable.ic_lucide_chevron_right, pager.right - dp(24), pager.centerY(), dp(20), white)
         centeredLabel(canvas, "空格", space, 18f, white, Paint.Align.CENTER)
         lucide(canvas, R.drawable.ic_lucide_delete, delete.centerX(), delete.centerY(), dp(23), white)
         lucide(canvas, R.drawable.ic_lucide_move_right, enter.centerX(), enter.centerY(), dp(21), Color.WHITE)
-        target(switcher, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+        val pagerZone = pager.width() / 3f
+        val pagerPrev = RectF(pager.left, pager.top, pager.left + pagerZone, pager.bottom)
+        val pagerNext = RectF(pager.right - pagerZone, pager.top, pager.right, pager.bottom)
+        target(pagerPrev, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
+            symbolsPage = (symbolsPage + symbolPages.size - 1) % symbolPages.size
+            invalidate()
+        }
+        target(pagerNext, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) {
             symbolsPage = (symbolsPage + 1) % symbolPages.size
             invalidate()
         }
