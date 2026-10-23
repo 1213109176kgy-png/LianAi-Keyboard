@@ -4,15 +4,17 @@
 
 An open-source AI-assisted Android keyboard for everyday typing, reply suggestions and message polishing.
 
-[简体中文](README_CN.md) · [Download](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest) · [Privacy](PRIVACY.md) · [GPL-3.0-or-later](LICENSE)
+[简体中文](README_CN.md) · [Download](https://lianai.bahuang.tech/h5/) · [Privacy](PRIVACY.md) · [GPL-3.0-or-later](LICENSE)
 
-Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a device.
+Current release: **v1.5.8**. Requires Android 10 or later and an arm64-v8a device.
 
 ## Features
 
 - Offline full-Pinyin and nine-key Chinese input, English, symbols, Emoji and candidates.
 - “Help Me Reply”: analyze pasted messages and return three selectable replies.
 - “Super Say”: polish a draft into three alternatives before inserting it into the host app.
+- Voice dictation: hold the mic key and speak; speech is transcribed straight into the input field.
+- Screenshot reply: pick a chat screenshot from the gallery and get replies tuned to the conversation.
 - Configurable prompts for partners, friends, family, colleagues, customers and other relationships.
 - DeepSeek, Kimi, Qwen, Doubao and other presets, plus custom OpenAI-compatible endpoints.
 - User-supplied API credentials protected by Android Keystore.
@@ -23,13 +25,13 @@ Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a devic
 <p align="center">一款面向 Android 的开源 AI 恋爱输入法：正常打字，也能帮你回、帮你说。</p>
 
 <p align="center">
-  <a href="https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest">下载最新版</a> ·
+  <a href="https://lianai.bahuang.tech/h5/">下载最新版</a> ·
   <a href="README.md">English</a> ·
   <a href="LICENSE">GPL-3.0-or-later</a> ·
   <a href="PRIVACY.md">隐私说明</a>
 </p>
 
-> 当前版本：**v1.5.3**。最低支持 Android 13（API 33），当前提供 arm64-v8a 安装包。
+> 当前版本：**v1.5.8**。最低支持 Android 10（API 29），当前提供 arm64-v8a 安装包。
 
 ## 项目简介
 
@@ -42,8 +44,10 @@ Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a devic
 - **基础输入法**：26 键拼音、九宫格拼音、英文、数字、符号、Emoji、候选词、删除与光标编辑。
 - **帮你回**：粘贴对方的话，分析情绪并生成三条可点击使用的回复；支持重新分析。
 - **超会说**：先在键盘内部输入草稿，一键优化为三条备选话术，再选择写入聊天输入框。
+- **语音听写**：按住麦克风说话，语音实时转成文字上屏。
+- **截图识别回复**：从相册选择聊天截图，AI 读懂对话并生成得体回复。
 - **关系提示词**：通用、心动对象、恋人、朋友、家人、同事、客户、上司等关系可分别配置系统提示词。
-- **多模型配置**：选择厂商、接口类型、API 地址、Key 和模型；支持自定义兼容接口。
+- **多模型配置**：订阅套餐开通官方 AI 通道免配置开箱即用，也可自配厂商、接口类型、API 地址、Key 和模型（兼容接口）。
 - **本地优先**：拼音与基础候选离线运行；剪贴板历史、听写历史默认关闭。
 
 ## 界面截图
@@ -56,7 +60,7 @@ Current release: **v1.5.3**. Requires Android 13 or later and an arm64-v8a devic
 
 ## 安装与使用
 
-1. 前往 [GitHub Releases](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest) 下载 v1.5.3 APK。
+1. 前往 [官方下载页](https://lianai.bahuang.tech/h5/) 下载 v1.5.8 APK。
 2. 安装后打开“恋爱键盘”，按照首页四步引导启用并切换输入法。
 3. 进入“我的 → 设置 → 大模型配置”，选择文本模型厂商并填写接口地址、模型和 API Key。
 4. 在微信、短信或其他应用中点击输入框，切换到恋爱键盘即可使用。
@@ -123,14 +127,14 @@ adb install -r .\app\build\outputs\apk\debug\app-debug.apk
 
 ---
 
-请只从本项目官方 GitHub/Gitee 仓库下载 APK，并在安装前核对 Release 页面公布的 SHA-256。
+请只从本项目官方 GitHub/Gitee 仓库或官方下载页（https://lianai.bahuang.tech/h5/）下载 APK，并在安装前核对公布的 SHA-256。
 
 
 </p>
 
 ## Install
 
-Download the APK from [GitHub Releases](https://github.com/1213109176kgy-png/LianAi-Keyboard/releases/latest), enable LianAi Keyboard in Android input-method settings, then configure your own text-model endpoint under **Profile → Settings → Model Configuration**. ASR is optional and collapsed by default.
+Download the APK from the [official download page](https://lianai.bahuang.tech/h5/), enable LianAi Keyboard in Android input-method settings, then configure your own text-model endpoint under **Profile → Settings → Model Configuration**. ASR is optional and collapsed by default.
 
 ## Build
 
