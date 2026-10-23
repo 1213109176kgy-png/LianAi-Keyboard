@@ -2540,13 +2540,15 @@ class MainActivity : AppCompatActivity() {
 
         lateinit var dialog: android.app.Dialog
 
-        fun bindDownloadPage(update: UpdateClient.UpdateInfo) {
+        fun bindDownloadPage() {
             primary.isEnabled = true
             primary.text = "前往浏览器下载"
             primary.setOnClickListener {
                 dialog.dismiss()
                 runCatching {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UpdateClient.DOWNLOAD_PAGE_URL)))
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(UpdateClient.DOWNLOAD_PAGE_URL)).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                    })
                     Toast.makeText(this@MainActivity, "已在浏览器打开下载页，请在页面中下载并安装新版本", Toast.LENGTH_LONG).show()
                 }.onFailure {
                     Toast.makeText(this@MainActivity, "无法打开浏览器：${it.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
@@ -2570,7 +2572,7 @@ class MainActivity : AppCompatActivity() {
                                 bindCheck()
                             } else {
                                 renderUpdate(update)
-                                bindDownloadPage(update)
+                                bindDownloadPage()
                             }
                         }
                         .onFailure { error ->
@@ -2588,7 +2590,7 @@ class MainActivity : AppCompatActivity() {
             bindCheck()
         } else {
             renderUpdate(known)
-            bindDownloadPage(known)
+            bindDownloadPage()
         }
         content.addView(status, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 6, bottom = 10))
         content.addView(notes, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, bottom = 12))

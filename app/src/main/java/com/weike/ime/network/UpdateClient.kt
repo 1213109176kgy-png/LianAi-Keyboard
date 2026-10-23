@@ -17,8 +17,8 @@ import kotlin.coroutines.resumeWithException
  * Backend-driven update channel. A small JSON manifest describes the newest
  * release (versionCode/versionName/notes). The app never downloads or installs
  * the APK itself any more — 检查更新 jumps to the download page in the system
- * browser instead, which avoids the unknown-source prompt and the ROM virus
- * warnings that in-app APK installs triggered. apkUrl/sha256/sizeBytes still
+ * browser instead; downloads and installation permissions are handled by that
+ * browser and the system installer. apkUrl/sha256/sizeBytes still
  * arrive in the manifest and are deliberately ignored.
  */
 class UpdateClient(
