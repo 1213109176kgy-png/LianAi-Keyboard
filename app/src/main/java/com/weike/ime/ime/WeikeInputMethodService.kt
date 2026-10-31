@@ -2496,6 +2496,12 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         resetDoubleSpacePeriod()
         autoPunctuationPending = false
         clearPredictions()
+        if (sensitiveField) {
+            // Never keep password characters in a composition/candidate buffer.
+            currentInputConnection?.commitText(value, 1)
+            render()
+            return
+        }
         englishBuffer += value
         englishCandidates = EnglishCandidateEngine.candidates(englishBuffer)
         updateComposingText(englishBuffer)
@@ -3232,7 +3238,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     private fun recordEnglishSelection(value: String) {
-        if (value.isBlank()) return
+        if (sensitiveField || value.isBlank()) return
         val entry = EnglishCandidateEngine.selected(value)
         serviceScope.launch { container.englishLearning.upsert(entry) }
     }

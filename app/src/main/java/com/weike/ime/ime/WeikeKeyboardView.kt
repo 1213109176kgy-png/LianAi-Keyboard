@@ -402,7 +402,7 @@ class WeikeKeyboardView(
         selectedSpelling: String = this.selectedSpelling,
         aiGuide: String? = this.aiGuide
     ) {
-        val oldSpellingVisible = showSpellingRow()
+        val oldInputExtraHeight = keyboardInputExtraHeight()
         if (this.spellingOptions != spellingOptions) spellingScroll = 0f
         this.spellingOptions = spellingOptions
         this.selectedSpelling = selectedSpelling
@@ -448,7 +448,6 @@ class WeikeKeyboardView(
             answerMaxScroll = 0f
         }
         this.pinyinBuffer = pinyinBuffer
-        if (oldSpellingVisible != showSpellingRow()) requestLayout()
         this.pinyinCandidates = pinyinCandidates
         this.englishBuffer = englishBuffer
         this.englishCandidates = englishCandidates
@@ -503,12 +502,12 @@ class WeikeKeyboardView(
             }, 190L)
         }
         this.recentClipboardText = recentClipboardText
-        if (targetMode == KeyboardMode.ENGLISH && englishBuffer.isBlank() && englishAutoCapitalize && englishAutoCapitalizeNext) {
+        if (!sensitive && targetMode == KeyboardMode.ENGLISH && englishBuffer.isBlank() && englishAutoCapitalize && englishAutoCapitalizeNext) {
             if (!uppercase) {
                 uppercase = true
                 automaticUppercase = true
             }
-        } else if (automaticUppercase && (!englishAutoCapitalize || !englishAutoCapitalizeNext || englishBuffer.isNotBlank())) {
+        } else if (automaticUppercase && (sensitive || !englishAutoCapitalize || !englishAutoCapitalizeNext || englishBuffer.isNotBlank())) {
             uppercase = false
             automaticUppercase = false
         }
@@ -552,7 +551,7 @@ class WeikeKeyboardView(
             modeTransition.setFloatValues(modeIndicator, targetIndicator)
             modeTransition.start()
         }
-        if (geometryChanged) requestLayout()
+        if (geometryChanged || oldInputExtraHeight != keyboardInputExtraHeight()) requestLayout()
         if (previousState != voiceState) {
             val feedback = when {
                 voiceState == VoiceUiState.Listening -> HapticFeedbackConstants.GESTURE_START
@@ -1485,7 +1484,7 @@ class WeikeKeyboardView(
             val box = cell(column, row)
             key(canvas, box)
             centeredLabel(canvas, letters, box, keyLetterSize(18f), white, Paint.Align.CENTER)
-            target(box, keySound = true) {
+            target(box, keySound = true, typingKey = true) {
                 punctuationStripVisible = false
                 actions.typePinyin(code)
             }
@@ -1494,7 +1493,7 @@ class WeikeKeyboardView(
             val box = cell(column, row, columnSpan = columnSpan)
             key(canvas, box)
             centeredLabel(canvas, text, box, 18f, white, Paint.Align.CENTER)
-            target(box, keySound = true, previewLabel = value) {
+            target(box, keySound = true, previewLabel = value, typingKey = true) {
                 punctuationStripVisible = false
                 actions.typeEnglish(value)
             }
@@ -2536,9 +2535,10 @@ class WeikeKeyboardView(
         swipeUpAction: (() -> Unit)? = null,
         releaseAction: (() -> Unit)? = null,
         previewLabel: String? = null,
+        typingKey: Boolean = false,
         action: () -> Unit
     ) {
-        targets += TouchTarget(box, enabled, repeat, hold, keySound, hapticFeedback, longPressAction, swipeUpAction, releaseAction, previewLabel, action)
+        targets += TouchTarget(box, enabled, repeat, hold, keySound, hapticFeedback, longPressAction, swipeUpAction, releaseAction, previewLabel, typingKey, action)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -2567,6 +2567,12 @@ class WeikeKeyboardView(
         }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // A new gesture must not inherit a cancelled/dragged pointer
+                // from an earlier candidate or relation-strip gesture.
+                secondaryTouches.clear()
+                cancelledSecondaryTouches.clear()
+                pressedPointers.clear()
+                feedbackPointers.clear()
                 touchDownX = event.x
                 touchDownY = event.y
                 // Candidate selection always wins when the header has been
@@ -2604,7 +2610,7 @@ class WeikeKeyboardView(
                 answerDragging = !candidateDragging && answerViewport?.contains(event.x, event.y) == true
                 candidateDragStartScroll = candidateScrollX
                 answerDragStartScroll = answerScrollY
-                val hit = targets.lastOrNull { it.enabled && it.box.contains(event.x, event.y) }
+                val hit = findTouchTarget(event.x, event.y)
                 cursorSliderDragging = hit == null && !candidateDragging && cursorSlider?.contains(event.x, event.y) == true
                 if (cursorSliderDragging) {
                     cursorSliderLastX = event.x
@@ -2638,7 +2644,7 @@ class WeikeKeyboardView(
             MotionEvent.ACTION_POINTER_DOWN -> {
                 val pointerIndex = event.actionIndex
                 val pointerId = event.getPointerId(pointerIndex)
-                val hit = targets.lastOrNull { it.enabled && it.box.contains(event.getX(pointerIndex), event.getY(pointerIndex)) }
+                val hit = findTouchTarget(event.getX(pointerIndex), event.getY(pointerIndex))
                 if (hit != null) {
                     secondaryTouches[pointerId] = hit
                     pressedPointers[pointerId] = hit.box
@@ -2668,7 +2674,9 @@ class WeikeKeyboardView(
                 }
                 secondaryTouches.toMap().forEach { (pointerId, target) ->
                     val pointerIndex = event.findPointerIndex(pointerId)
-                    if (pointerIndex < 0 || !target.box.contains(event.getX(pointerIndex), event.getY(pointerIndex))) {
+                    // Match the release tolerance: slight finger drift outside
+                    // the painted key is still a tap, not a permanent cancel.
+                    if (pointerIndex < 0 || !hitsWithSlop(target.box, event.getX(pointerIndex), event.getY(pointerIndex))) {
                         cancelledSecondaryTouches += pointerId
                         pressedPointers.remove(pointerId)
                     }
@@ -2766,12 +2774,13 @@ class WeikeKeyboardView(
                 val pointerIndex = event.actionIndex
                 val pointerId = event.getPointerId(pointerIndex)
                 val target = secondaryTouches.remove(pointerId)
-                val cancelled = cancelledSecondaryTouches.remove(pointerId)
+                val cancelled = cancelledSecondaryTouches.remove(pointerId) ||
+                    (pointerId == primaryPointerId && activeTargetCancelled)
                 if (target != null && !cancelled && hitsWithSlop(target.box, event.getX(pointerIndex), event.getY(pointerIndex)) &&
                     (!target.repeat || actions.canBackspace())) {
                     if (pointerId == primaryPointerId && longPressTriggered) {
                         target.releaseAction?.invoke()
-                    } else {
+                    } else if (!target.hold) {
                         target.action.invoke()
                     }
                 }
@@ -3037,11 +3046,20 @@ class WeikeKeyboardView(
     private fun keyLetterSize(size: Float): Float = if (isLandscape()) size * .8f else size
     private fun isLandscape(): Boolean =
         resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    private fun standardKeyboardTop(): Float = (if (!pinyinReady) dp(70) else dp(62)) + (if (mode == KeyboardMode.PINYIN) keyboardInputExtraHeight() else 0f)
+    private fun standardKeyboardTop(): Float = (if (!pinyinReady && !pinyinNineKey) dp(70) else dp(62)) + (if (mode == KeyboardMode.PINYIN) keyboardInputExtraHeight() else 0f)
     private fun showSpellingRow(): Boolean = (mode == KeyboardMode.PINYIN || (mode == KeyboardMode.VOICE && superSayPinyin)) && pinyinNineKey && pinyinBuffer.isNotBlank() && spellingOptions.isNotEmpty()
     private fun spellingRowHeight(): Float = if (showSpellingRow()) dp(40) else 0f
 
-    private fun keyboardInputExtraHeight(): Float = if (!showSpellingRow()) 0f else if (mode == KeyboardMode.VOICE) dp(98) else dp(40)
+    private fun keyboardInputExtraHeight(): Float = when {
+        // Keep the T9 key grid at a fixed screen position while the decoder
+        // adds/removes the spelling row. Resizing the IME window for each word
+        // can leave a frame with new local hit boxes but the old window origin,
+        // so a fast tap lands on a different row (or misses its release).
+        mode == KeyboardMode.PINYIN && pinyinNineKey -> dp(40)
+        !showSpellingRow() -> 0f
+        mode == KeyboardMode.VOICE -> dp(98)
+        else -> dp(40)
+    }
 
     private fun spellingRowTop(): Float = if (mode == KeyboardMode.VOICE) dp(240) else 0f
 
@@ -3073,14 +3091,14 @@ class WeikeKeyboardView(
 
     private fun contentBottom(): Float = height.toFloat() - dp(keyboardBottomOffsetLevel * 8)
     private fun keyboardBottomReserve(): Float = if (cursorSliderEnabled) dp(32) else dp(8)
-    private fun hasComposition(): Boolean =
+    private fun hasComposition(): Boolean = !sensitive && (
         ((mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) && pinyinBuffer.isNotBlank()) ||
-            (mode == KeyboardMode.ENGLISH && englishBuffer.isNotBlank())
+            (mode == KeyboardMode.ENGLISH && englishBuffer.isNotBlank()))
     private fun hasCompositionCandidates(): Boolean =
         if (mode == KeyboardMode.PINYIN || mode == KeyboardMode.VOICE) pinyinCandidates.isNotEmpty()
         else englishCandidates.isNotEmpty()
 
-    private fun hasPredictions(): Boolean = mode in listOf(KeyboardMode.PINYIN, KeyboardMode.ENGLISH, KeyboardMode.SYMBOLS) &&
+    private fun hasPredictions(): Boolean = !sensitive && mode in listOf(KeyboardMode.PINYIN, KeyboardMode.ENGLISH, KeyboardMode.SYMBOLS) &&
         predictionCandidates.isNotEmpty()
     private fun polishIndexAt(x: Float, textLeft: Float): Int {
         paint.textSize = sp(13)
@@ -3105,6 +3123,22 @@ class WeikeKeyboardView(
         return x >= box.left - slop && x <= box.right + slop &&
             y >= box.top - slop && y <= box.bottom + slop
     }
+
+    private fun findTouchTarget(x: Float, y: Float): TouchTarget? {
+        // Explicit targets always win. Only text-entry keys absorb their
+        // half of the 7dp visual gutter; do not enlarge AI/navigation controls.
+        targets.lastOrNull { it.enabled && it.box.contains(x, y) }?.let { return it }
+        val gutter = dp(7) / 2f
+        return targets.asSequence().filter {
+            it.enabled && it.typingKey &&
+                x >= it.box.left - gutter && x <= it.box.right + gutter &&
+                y >= it.box.top - gutter && y <= it.box.bottom + gutter
+        }.minByOrNull {
+            val dx = x - it.box.centerX()
+            val dy = y - it.box.centerY()
+            dx * dx + dy * dy
+        }
+    }
     private fun isPressed(box: RectF): Boolean =
         sameBox(pressedBox, box) || pressedPointers.values.any { sameBox(it, box) }
     private fun sameBox(first: RectF?, second: RectF?): Boolean = first != null && second != null &&
@@ -3121,6 +3155,7 @@ class WeikeKeyboardView(
         val swipeUpAction: (() -> Unit)?,
         val releaseAction: (() -> Unit)?,
         val previewLabel: String?,
+        val typingKey: Boolean,
         val action: () -> Unit
     )
 

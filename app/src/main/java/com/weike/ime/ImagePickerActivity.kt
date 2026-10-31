@@ -18,6 +18,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.weike.ime.ime.WeikeInputMethodService
@@ -44,6 +45,13 @@ class ImagePickerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Cancel selection by returning to the calling chat, including gesture back.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                moveTaskToBack(true)
+                finish()
+            }
+        })
         val permission = if (android.os.Build.VERSION.SDK_INT >= 33) {
             Manifest.permission.READ_MEDIA_IMAGES
         } else {
@@ -54,12 +62,6 @@ class ImagePickerActivity : AppCompatActivity() {
         } else {
             requestPermission.launch(permission)
         }
-    }
-
-    /** 放弃选图同样退回聊天界面，而不是落在同任务的主页面上。 */
-    override fun onBackPressed() {
-        moveTaskToBack(true)
-        finish()
     }
 
     private fun loadGallery() {

@@ -34,6 +34,12 @@ android {
         // does not report a false update against the exact same baseline.
         versionCode = 38
         versionName = "1.5.8"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Device regressions use a separate app so testing never replaces a
+        // user's signed installation or its model/account configuration.
+        if (providers.gradleProperty("touchRegression").orNull == "true") {
+            applicationIdSuffix = ".touchtest"
+        }
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -150,6 +156,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     testImplementation(kotlin("test"))
+    androidTestImplementation("androidx.test:runner:1.6.2")
     // org.json is an Android stub on the JVM; provide the real implementation for unit tests.
     testImplementation("org.json:json:20240303")
 }
