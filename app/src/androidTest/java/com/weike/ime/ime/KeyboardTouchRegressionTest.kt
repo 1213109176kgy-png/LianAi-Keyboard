@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.AndroidJUnit4
 import java.lang.reflect.Proxy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -122,6 +123,8 @@ class KeyboardTouchRegressionTest {
         measure()
         val emptyHeight = f.view.height
         val emptyKey = f.key("2")
+        assertTrue("Idle T9 header must not reserve a blank 40dp spelling band",
+            emptyKey.top <= 70f * f.density)
         repeat(20) {
             f.view.update(pinyinBuffer = "ni", spellingOptions = listOf("ni", "mi"))
             measure()

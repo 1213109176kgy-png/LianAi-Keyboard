@@ -1089,7 +1089,9 @@ class WeikeKeyboardView(
         val emotion = RectF(card.left + dp(14), card.top + dp(14), card.right - dp(54), card.top + dp(66))
         rounded(canvas, emotion, dp(14), cardSoftBg)
         label(canvas, "😊", emotion.left + dp(30), emotion.centerY() + dp(8), 24f, white, Paint.Align.CENTER)
-        label(canvas, replyEmotion.ifBlank { "积极期待" }, emotion.left + dp(57), emotion.centerY() + dp(5), 14f, Color.rgb(255, 137, 126), Paint.Align.LEFT, true)
+        leftClippedLabel(canvas, replyEmotion.ifBlank { "积极期待" },
+            RectF(emotion.left + dp(45), emotion.top, emotion.right, emotion.bottom),
+            14f, Color.rgb(255, 137, 126))
         label(canvas, "AI推荐回复（点击使用）", card.left + dp(14), card.top + dp(91), 12f, accent, Paint.Align.LEFT)
         replyOptions.take(3).forEachIndexed { index, option ->
             val top = card.top + dp(104) + index * dp(75)
@@ -1729,7 +1731,11 @@ class WeikeKeyboardView(
     ) {
         val spellingHeight = if (mode == KeyboardMode.PINYIN) spellingRowHeight() else 0f
         if (spellingHeight > 0) drawSpellingRow(canvas)
-        val y = if (mode == KeyboardMode.VOICE) dp(291) else dp(11) + spellingHeight
+        val y = when {
+            mode == KeyboardMode.VOICE -> dp(291)
+            mode == KeyboardMode.PINYIN && pinyinNineKey && spellingHeight > 0 -> spellingHeight + dp(1)
+            else -> dp(11) + spellingHeight
+        }
         val textSize = (18 + candidateTextSizeLevel * 2).toFloat()
         val rowHeight = maxOf(dp(37), sp(textSize.toInt() + 16))
         val expandWidth = dp(43)
@@ -3048,14 +3054,14 @@ class WeikeKeyboardView(
         resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     private fun standardKeyboardTop(): Float = (if (!pinyinReady && !pinyinNineKey) dp(70) else dp(62)) + (if (mode == KeyboardMode.PINYIN) keyboardInputExtraHeight() else 0f)
     private fun showSpellingRow(): Boolean = (mode == KeyboardMode.PINYIN || (mode == KeyboardMode.VOICE && superSayPinyin)) && pinyinNineKey && pinyinBuffer.isNotBlank() && spellingOptions.isNotEmpty()
-    private fun spellingRowHeight(): Float = if (showSpellingRow()) dp(40) else 0f
+    private fun spellingRowHeight(): Float = if (!showSpellingRow()) 0f else if (mode == KeyboardMode.PINYIN) dp(22) else dp(40)
 
     private fun keyboardInputExtraHeight(): Float = when {
-        // Keep the T9 key grid at a fixed screen position while the decoder
-        // adds/removes the spelling row. Resizing the IME window for each word
-        // can leave a frame with new local hit boxes but the old window origin,
-        // so a fast tap lands on a different row (or misses its release).
-        mode == KeyboardMode.PINYIN && pinyinNineKey -> dp(40)
+        // Fit spelling + candidates inside the normal header. Reserve extra
+        // height only for enlarged candidate fonts, independent of composition,
+        // so an idle keyboard has no empty spelling band and keys never jump.
+        mode == KeyboardMode.PINYIN && pinyinNineKey ->
+            (dp(25) + maxOf(dp(37), sp(34 + candidateTextSizeLevel * 2)) - dp(62)).coerceAtLeast(0f)
         !showSpellingRow() -> 0f
         mode == KeyboardMode.VOICE -> dp(98)
         else -> dp(40)
@@ -3065,21 +3071,23 @@ class WeikeKeyboardView(
 
     private fun drawSpellingRow(canvas: Canvas) {
         val top = spellingRowTop()
+        val compact = mode == KeyboardMode.PINYIN
+        val rowHeight = spellingRowHeight()
         val options = listOf("") + spellingOptions
-        paint.textSize = sp(15)
+        paint.textSize = sp(if (compact) 12 else 15)
         paint.typeface = Typeface.DEFAULT
         val widths = options.map { maxOf(dp(46), paint.measureText(it.ifBlank { "全部" }) + dp(24)) }
         spellingMaxScroll = (widths.sum() + dp(8) - width).coerceAtLeast(0f)
         spellingScroll = spellingScroll.coerceIn(0f, spellingMaxScroll)
         var left = dp(4) - spellingScroll
         canvas.save()
-        canvas.clipRect(0f, top, width.toFloat(), top + dp(40))
+        canvas.clipRect(0f, top, width.toFloat(), top + rowHeight)
         options.forEachIndexed { index, spelling ->
-            val box = RectF(left, top + dp(4), left + widths[index], top + dp(37))
+            val box = RectF(left, top + dp(if (compact) 1 else 4), left + widths[index], top + rowHeight - dp(if (compact) 1 else 3))
             left = box.right
             if (box.right > 0 && box.left < width) {
                 if (spelling == selectedSpelling) rounded(canvas, box, dp(10), tabBackground)
-                label(canvas, spelling.ifBlank { "全部" }, box.centerX(), box.centerY() + dp(5), 15f,
+                label(canvas, spelling.ifBlank { "全部" }, box.centerX(), box.centerY() + dp(if (compact) 4 else 5), if (compact) 12f else 15f,
                     if (spelling == selectedSpelling) accent else muted, Paint.Align.CENTER, spelling == selectedSpelling)
                 val hit = RectF(box).apply { intersect(0f, top, width.toFloat(), top + dp(40)) }
                 target(hit) { actions.choosePinyinSpelling(spelling) }

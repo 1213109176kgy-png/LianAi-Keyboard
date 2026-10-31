@@ -6,7 +6,7 @@ An open-source AI-assisted Android keyboard for everyday typing, reply suggestio
 
 [简体中文](README_CN.md) · [Download](https://lianai.bahuang.tech/h5/) · [Privacy](PRIVACY.md) · [GPL-3.0-or-later](LICENSE)
 
-Current release: **v1.5.8**. Requires Android 10 or later and an arm64-v8a device.
+Current version: **v1.5.9**. Requires Android 10 or later and an arm64-v8a device.
 
 ## Features
 
@@ -31,7 +31,7 @@ Current release: **v1.5.8**. Requires Android 10 or later and an arm64-v8a devic
   <a href="PRIVACY.md">隐私说明</a>
 </p>
 
-> 当前版本：**v1.5.8**。最低支持 Android 10（API 29），当前提供 arm64-v8a 安装包。
+> 当前版本：**v1.5.9**。最低支持 Android 10（API 29），当前提供 arm64-v8a 安装包。
 
 ## 项目简介
 
@@ -60,7 +60,7 @@ Current release: **v1.5.8**. Requires Android 10 or later and an arm64-v8a devic
 
 ## 安装与使用
 
-1. 前往 [官方下载页](https://lianai.bahuang.tech/h5/) 下载 v1.5.8 APK。
+1. 前往 [官方下载页](https://lianai.bahuang.tech/h5/) 下载已发布的最新 APK。
 2. 安装后打开“恋爱键盘”，按照首页四步引导启用并切换输入法。
 3. 进入“我的 → 设置 → 大模型配置”，选择文本模型厂商并填写接口地址、模型和 API Key。
 4. 在微信、短信或其他应用中点击输入框，切换到恋爱键盘即可使用。

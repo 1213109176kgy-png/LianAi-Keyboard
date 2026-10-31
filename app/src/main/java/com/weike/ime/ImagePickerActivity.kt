@@ -2,6 +2,7 @@ package com.weike.ime
 
 import android.Manifest
 import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -11,10 +12,11 @@ import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
+import android.widget.AbsListView
+import android.widget.BaseAdapter
+import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +25,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.weike.ime.ime.WeikeInputMethodService
 import kotlin.concurrent.thread
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /**
  * 输入法无法直接弹相册选图，经由这个页面中转：
@@ -31,6 +35,15 @@ import kotlin.concurrent.thread
  * URI 通过应用内广播交还给 IME 服务，随后立即退出。
  */
 class ImagePickerActivity : AppCompatActivity() {
+    private val thumbnailExecutor = Executors.newFixedThreadPool(3)
+    private class ThumbnailView(context: Context) : androidx.appcompat.widget.AppCompatImageView(context) {
+        var request: Future<*>? = null
+    }
+
+    override fun onDestroy() {
+        thumbnailExecutor.shutdownNow()
+        super.onDestroy()
+    }
 
     private val requestPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -86,16 +99,14 @@ class ImagePickerActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, dp(12))
         })
-        val gridHolder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = ScrollView(this)
-        scroll.addView(
-            gridHolder,
-            ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        )
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
+        val grid = GridView(this).apply {
+            numColumns = 3
+            horizontalSpacing = dp(4)
+            verticalSpacing = dp(4)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            clipToPadding = false
+        }
+        root.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
         thread(name = "gallery-load") {
@@ -120,8 +131,10 @@ class ImagePickerActivity : AppCompatActivity() {
                 }
             }
             runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
                 if (photos.isEmpty()) {
-                    gridHolder.addView(TextView(this).apply {
+                    root.removeView(grid)
+                    root.addView(TextView(this).apply {
                         text = "相册里还没有图片"
                         textSize = 14f
                         setTextColor(Color.rgb(158, 130, 140))
@@ -130,30 +143,22 @@ class ImagePickerActivity : AppCompatActivity() {
                     })
                     return@runOnUiThread
                 }
-                val columns = 3
-                val pad = dp(4)
-                val cell = (resources.displayMetrics.widthPixels - pad * (columns + 1) * 2 / 3) / columns
-                photos.chunked(columns).forEach { rowPhotos ->
-                    val row = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(pad, pad / 2, pad, pad / 2)
-                    }
-                    rowPhotos.forEach { uri ->
-                        val frame = FrameLayout(this)
-                        row.addView(
-                            frame,
-                            LinearLayout.LayoutParams(cell, cell).apply { setMargins(pad / 2, 0, pad / 2, 0) }
-                        )
-                        val image = ImageView(this).apply {
+                val cell = (resources.displayMetrics.widthPixels - dp(16)) / 3
+                grid.adapter = object : BaseAdapter() {
+                    override fun getCount() = photos.size
+                    override fun getItem(position: Int) = photos[position]
+                    override fun getItemId(position: Int) = position.toLong()
+                    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                        val uri = getItem(position)
+                        val image = (convertView as? ThumbnailView) ?: ThumbnailView(this@ImagePickerActivity).apply {
                             scaleType = ImageView.ScaleType.CENTER_CROP
                             setBackgroundColor(Color.rgb(232, 224, 230))
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
+                            layoutParams = AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, cell)
                         }
-                        frame.addView(image)
-                        frame.setOnClickListener(
+                        image.request?.cancel(true)
+                        image.tag = uri
+                        image.setImageDrawable(null)
+                        image.setOnClickListener(
                             View.OnClickListener {
                                 WeikeInputMethodService.pendingImageUri = uri
                                 // 本页与主页面同任务：直接 finish 会把栈顶留成主页面，
@@ -172,17 +177,16 @@ class ImagePickerActivity : AppCompatActivity() {
                                 }, 500)
                             }
                         )
-                        thread(name = "thumb-load") {
+                        image.request = thumbnailExecutor.submit {
                             val thumb = runCatching {
                                 contentResolver.loadThumbnail(uri, Size(288, 288), null)
                             }.getOrNull()
-                            runOnUiThread { if (!isFinishing) image.setImageBitmap(thumb) }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed && image.tag == uri) image.setImageBitmap(thumb)
+                            }
                         }
+                        return image
                     }
-                    gridHolder.addView(
-                        row,
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    )
                 }
             }
         }

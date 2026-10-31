@@ -1431,10 +1431,22 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 }
             // 个别 ROM 的媒体提供器会偶发阻塞 openInputStream（协程取消不了阻塞 IO），
             // 用带超时的 Future 兜底：卡住也能在限时后恢复 UI 并提示，而不是永远转圈。
-            val image = runCatching {
-                imageDecodeExecutor.submit(java.util.concurrent.Callable { downscaleAndEncode(uri) })
-                    .get(12, java.util.concurrent.TimeUnit.SECONDS)
-            }.getOrNull()
+            val image = try {
+                // The service scope is on Main: waiting on Future.get here used
+                // to freeze every key/redraw while the media provider decoded.
+                kotlinx.coroutines.runInterruptible(Dispatchers.IO) {
+                    val task = imageDecodeExecutor.submit(java.util.concurrent.Callable { downscaleAndEncode(uri) })
+                    try {
+                        task.get(12, java.util.concurrent.TimeUnit.SECONDS)
+                    } finally {
+                        if (!task.isDone) task.cancel(true)
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
             if (image == null) {
                 replyLoading = false
                 voiceState = VoiceUiState.Error("读取图片超时，请重新选择")
