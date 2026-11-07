@@ -1,0 +1,9 @@
+# System knowledge and document detail
+
+Replace the bundled strategist Markdown with the cleaned local document. System document identity is app-owned; the store rejects edits/deletes and exposes enable/disable separately. Schema 3 upgrades the system content from the asset while preserving its previous enable state and all user-authored documents. Selection remains unchanged, including explicit none. The MIT notice is packaged separately and never retrieved as reference material.
+
+List rows show title, character count, enable state and system designation only. System overflow menus only toggle enable state; user documents retain editing and deletion. Opening any document shows rendered Markdown under the title 查看. System detail has no input fields, tabs or save action. User detail offers an 编辑 action leading to its editor. Detail and editor hide the shell bottom navigation, restoring it when returning to the list, including system back and import/new-document entry.
+
+Verify clean-asset identity, schema-2 upgrade and old-folder migration, immutable system content, state toggles, editable user documents, Markdown rendering, navigation restoration, existing knowledge requests and ordinary/password keyboard regressions. Build and install a signed production APK; inspect list, system menu and detail on the connected phone.
+
+Repeated-open performance: cache immutable rendered spans across page instances with a bounded process LRU, keyed by content SHA-256 and display configuration. Warm the system document when entering the list, coalesce concurrent parses, and use application context for cached work. A cold read shows its opening text immediately while the full local rendering completes; no loading placeholder. Changed user content gets a new cache entry. Verify cached full-document text is available in the same UI callback across repeated opens, and edits invalidate that entry.

@@ -28,6 +28,9 @@ class RoutedTextPolisher(
     override suspend fun suggestPolishes(text: String, relation: String) =
         use(ModelFeature.SUPER_SPEAK) { it.suggestPolishes(text, relation) }
     override suspend fun suggestReplies(message: String) = use(ModelFeature.REPLY) { it.suggestReplies(message) }
+    override suspend fun suggestRepliesWithKnowledge(message: String, reference: String) = use(ModelFeature.REPLY) { it.suggestRepliesWithKnowledge(message, reference) }
+    override suspend fun suggestPolishesWithKnowledge(text: String, relation: String, reference: String) =
+        use(ModelFeature.SUPER_SPEAK) { it.suggestPolishesWithKnowledge(text, relation, reference) }
     override fun polishStream(text: String, style: WritingStyle, punctuation: PunctuationPreference, lexicon: List<LexiconTerm>, optimizeExpression: Boolean, structureHint: Boolean): Flow<String> = flow {
         emitAll(resolve(ModelFeature.SUPER_SPEAK).polishStream(text, style, punctuation, lexicon, optimizeExpression, structureHint))
     }

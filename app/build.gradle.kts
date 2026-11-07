@@ -32,8 +32,8 @@ android {
         // This product is based on the current Vertick IME v1.4.3 release.
         // Keep the upstream-compatible version so the built-in release checker
         // does not report a false update against the exact same baseline.
-        versionCode = 39
-        versionName = "1.5.9"
+        versionCode = 50
+        versionName = "1.6.10"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Device regressions use a separate app so testing never replaces a
         // user's signed installation or its model/account configuration.
@@ -143,6 +143,10 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.composables:icons-lucide-android:1.1.0")

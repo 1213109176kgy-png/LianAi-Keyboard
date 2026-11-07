@@ -39,6 +39,7 @@ import com.weike.ime.data.WritingStyle
 enum class KeyboardMode { VOICE, ASK, TEXT, ENGLISH, PINYIN, CLIPBOARD, SYMBOLS }
 
 interface KeyboardActions {
+    fun chooseKnowledge() {}
     fun selectMode(mode: KeyboardMode)
     fun returnToNineKeyPinyin()
     fun toggleVoice()
@@ -103,6 +104,8 @@ class WeikeKeyboardView(
     private val actions: KeyboardActions,
     private val keySound: KeyboardSoundPlayer
 ) : View(context) {
+    var knowledgeLabel: String = "狗头军师知识库"
+    private var knowledgeFooterBounds: RectF? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val targets = mutableListOf<TouchTarget>()
     private val iconCache = android.util.SparseArray<android.graphics.drawable.Drawable>()
@@ -179,7 +182,7 @@ class WeikeKeyboardView(
     private var keyboardHeightLevel = 0
     private var keyboardBottomOffsetLevel = 0
     private var punctuationShortcuts = false
-    private var cursorSliderEnabled = true
+    private var cursorSliderEnabled = false
     private var automaticUppercase = false
     private var meter = 0f
     private var dictationActive = false
@@ -480,7 +483,8 @@ class WeikeKeyboardView(
         this.keyboardHeightLevel = keyboardHeightLevel.coerceIn(-2, 2)
         this.keyboardBottomOffsetLevel = keyboardBottomOffsetLevel.coerceIn(0, 4)
         this.punctuationShortcuts = punctuationShortcuts
-        this.cursorSliderEnabled = cursorSliderEnabled
+        // Retired bottom slider: ignore old saved preferences as well as callers.
+        this.cursorSliderEnabled = false
         this.polishDraft = polishDraft
         this.polishCursor = polishCursor.coerceIn(0, polishDraft.length)
         this.polishOptions = polishOptions
@@ -607,7 +611,9 @@ class WeikeKeyboardView(
             mode == KeyboardMode.ASK -> dp(500)
             else -> dp(368)
         }
-        val desired = (base + keyboardInputExtraHeight() + dp(keyboardHeightLevel * 18) + dp(keyboardBottomOffsetLevel * 8)).toInt()
+        // Remove the old 24dp slider allowance instead of stretching the keys
+        // into the reclaimed strip. Key sizes and touch spacing stay unchanged.
+        val desired = (base - dp(24) + keyboardInputExtraHeight() + dp(keyboardHeightLevel * 18) + dp(keyboardBottomOffsetLevel * 8)).toInt()
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(desired, heightMeasureSpec))
     }
 
@@ -628,6 +634,7 @@ class WeikeKeyboardView(
         }
         canvas.drawPath(surface, paint)
         targets.clear()
+        knowledgeFooterBounds = null
         cursorSlider = null
         candidateStrip = null
         polishRelationViewport = null
@@ -677,7 +684,19 @@ class WeikeKeyboardView(
             KeyboardMode.TEXT -> drawKeyboard(canvas, true)
             else -> drawKeyboard(canvas, mode == KeyboardMode.PINYIN)
         }
-        if (cursorSliderEnabled) drawCursorSlider(canvas)
+        if (!sensitive && mode in listOf(KeyboardMode.ASK, KeyboardMode.VOICE) &&
+            (voiceState == VoiceUiState.Idle || voiceState is VoiceUiState.Error)) {
+            val selector = knowledgeFooterBounds?.let { space ->
+                RectF(space.left, space.centerY() - dp(16), space.right, space.centerY() + dp(16))
+            } ?: RectF(if (mode == KeyboardMode.ASK && replyOptions.isNotEmpty()) width / 2f + dp(8) else dp(24),
+                contentBottom() - dp(48), width - dp(24), contentBottom() - dp(12))
+            rounded(canvas, selector, dp(10), cardBg)
+            paint.textSize = sp(11)
+            val caption = android.text.TextUtils.ellipsize("$knowledgeLabel ▾", android.text.TextPaint(paint),
+                (selector.width() - dp(16)).coerceAtLeast(1f), android.text.TextUtils.TruncateAt.END).toString()
+            centeredLabel(canvas, caption, selector, 11f, accent, Paint.Align.CENTER)
+            target(selector) { actions.chooseKnowledge() }
+        }
         drawKeyPreview(canvas)
     }
 
@@ -713,15 +732,16 @@ class WeikeKeyboardView(
     }
 
     private fun drawHeader(canvas: Canvas) {
+        val headerBottom = dp(48)
         modeTabs = null
         val showingAnswer = mode == KeyboardMode.ASK && voiceState is VoiceUiState.Preview
         if (showingAnswer) {
-            val back = RectF(dp(8), dp(10), dp(46), dp(48))
+            val back = RectF(dp(8), dp(10), dp(46), headerBottom)
             lucide(canvas, R.drawable.ic_lucide_chevron_left, back.centerX(), back.centerY(), dp(24), white)
             target(back, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.dismissAnswer() }
             // Result insertion replaces the regular header close control, so it
             // must occupy exactly the same visual and touch position.
-            val insert = RectF(width - dp(46), dp(10), width - dp(8), dp(48))
+            val insert = RectF(width - dp(46), dp(10), width - dp(8), headerBottom)
             rounded(canvas, insert, dp(19), tabBackground)
             lucide(canvas, R.drawable.ic_lucide_arrow_big_up, insert.centerX(), insert.centerY(), dp(18), muted)
             target(insert, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.insertAnswer() }
@@ -732,7 +752,7 @@ class WeikeKeyboardView(
             val tabsLeft = tabsRight - tabCellWidth * availableModes.size
             // Keep the quick paste affordance clear of the mode selector at every mode count.
             val expandedWidth = minOf(dp(220), (tabsLeft - dp(18)).coerceAtLeast(dp(92)))
-            val quickPaste = RectF(dp(10), dp(10), dp(10) + expandedWidth * quickPasteProgress, dp(48))
+            val quickPaste = RectF(dp(10), dp(10), dp(10) + expandedWidth * quickPasteProgress, headerBottom)
             rounded(canvas, quickPaste, dp(19), tabBackground)
             val iconSurface = RectF(quickPaste.left + dp(4), quickPaste.top + dp(4), quickPaste.left + dp(34), quickPaste.bottom - dp(4))
             rounded(canvas, iconSurface, dp(15), key)
@@ -759,7 +779,7 @@ class WeikeKeyboardView(
         // Landscape supplies this control from the floating panel itself.
         // Portrait draws it here in the regular IME surface.
         if (showCloseButton && !isLandscape()) {
-            val closeKeyboard = RectF(width - dp(46), dp(10), width - dp(8), dp(48))
+            val closeKeyboard = RectF(width - dp(46), dp(10), width - dp(8), headerBottom)
             rounded(canvas, closeKeyboard, dp(19), tabBackground)
             lucide(canvas, R.drawable.ic_lucide_chevron_down, closeKeyboard.centerX(), closeKeyboard.centerY(), dp(18), muted)
             target(closeKeyboard, hapticFeedback = HapticFeedbackConstants.GESTURE_END) { actions.closeKeyboard() }
@@ -769,7 +789,7 @@ class WeikeKeyboardView(
             // The floating landscape panel owns the far-right close control.
             // Keep the recording cancel action immediately to its left.
             val closeRight = if (showCloseButton) width - dp(54) else width - dp(8)
-            val close = RectF(closeRight - dp(38), dp(10), closeRight, dp(48))
+            val close = RectF(closeRight - dp(38), dp(10), closeRight, headerBottom)
             rounded(canvas, close, dp(19), tabBackground)
             lucide(canvas, R.drawable.ic_lucide_x, close.centerX(), close.centerY(), dp(17), muted)
             target(close, hapticFeedback = HapticFeedbackConstants.GESTURE_END) { actions.cancelVoice() }
@@ -780,7 +800,7 @@ class WeikeKeyboardView(
         // right. Keep a compact selector immediately to its left.
         val tabsRight = if (showCloseButton) width - dp(54) else width - dp(8)
         val tabsLeft = dp(8).toFloat()
-        val tabs = RectF(tabsLeft, dp(10), tabsRight, dp(48))
+        val tabs = RectF(tabsLeft, dp(10), tabsRight, headerBottom)
         modeTabs = tabs
         rounded(canvas, tabs, dp(20), tabBackground)
         val cell = tabs.width() / availableModes.size
@@ -1105,7 +1125,7 @@ class WeikeKeyboardView(
             leftClippedLabel(canvas, option, RectF(box.left + dp(12), box.top, box.right - dp(12), box.bottom), 13f, white)
             target(box, hapticFeedback = HapticFeedbackConstants.CONFIRM) { actions.selectReplyOption(option) }
         }
-        val retry = RectF(card.centerX() - dp(68), card.bottom - dp(45), card.centerX() + dp(68), card.bottom - dp(8))
+        val retry = RectF(card.left + dp(14), card.bottom - dp(45), card.centerX() - dp(8), card.bottom - dp(8))
         label(canvas, "🔄 重新分析", retry.centerX(), retry.centerY() + dp(5), 13f, accent, Paint.Align.CENTER, true)
         target(retry, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.regenerateReplyOptions() }
         drawReplyClose(canvas, card)
@@ -1211,7 +1231,7 @@ class WeikeKeyboardView(
         val gap = dp(7)
         val edge = dp(5)
         val bottomActionHeight = dp(58)
-        val keyHeight = (contentBottom() - top - gap - keyboardBottomReserve().coerceAtLeast(dp(30)) - bottomActionHeight - gap * 3) / 4f
+        val keyHeight = (contentBottom() - top - gap - keyboardBottomReserve() - bottomActionHeight - gap * 3) / 4f
         val letterWidth = (width - edge * 2 - gap * 9) / 10f
         letters(canvas, "qwertyuiop", top, keyHeight, false, edge, letterWidth)
         val secondWidth = letterWidth * 9 + gap * 8
@@ -1467,7 +1487,7 @@ class WeikeKeyboardView(
         // Reserve its height before calculating the 4 keypad rows, otherwise the
         // icons visually and tactically collide with emoji/send/space keys.
         val bottomActionHeight = dp(58)
-        val bottomReserve = keyboardBottomReserve().coerceAtLeast(dp(30)) + bottomActionHeight
+        val bottomReserve = keyboardBottomReserve() + bottomActionHeight
         val keyHeight = (contentBottom() - top - gap - bottomReserve - gap * 3) / 4f
         val keyWidth = (width - edge * 2 - gap * 4) / 5f
         // Derive from specialKey so every modifier/function key shares the same
@@ -1589,6 +1609,7 @@ class WeikeKeyboardView(
             target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
         val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
+        if (mode == KeyboardMode.VOICE) knowledgeFooterBounds = RectF(switchKeyboard.right + dp(8), bottomTop, voice.left - dp(8), touchBottom)
         drawDictationMic(canvas, voice.centerX(), bottomIconY)
         target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
         return
@@ -1702,6 +1723,7 @@ class WeikeKeyboardView(
         target(switchKeyboard, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.switchInputMethod() }
 
         val voice = RectF(width - edge - keyWidth, bottomTop, width - edge, touchBottom)
+        if (mode == KeyboardMode.VOICE) knowledgeFooterBounds = RectF(switchKeyboard.right + dp(8), bottomTop, voice.left - dp(8), touchBottom)
         drawDictationMic(canvas, voice.centerX(), bottomIconY)
         target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
     }
@@ -2140,6 +2162,7 @@ class WeikeKeyboardView(
         }
 
         val voice = RectF(width - edge - actionWidth, actionTop, width - edge, touchBottom)
+        if (mode == KeyboardMode.VOICE) knowledgeFooterBounds = RectF(switchKeyboard.right + dp(8), actionTop, voice.left - dp(8), touchBottom)
         drawDictationMic(canvas, voice.centerX(), iconY)
         target(voice, hapticFeedback = HapticFeedbackConstants.CONTEXT_CLICK) { actions.toggleDictation() }
     }
@@ -2173,7 +2196,7 @@ class WeikeKeyboardView(
     private fun drawSymbols(canvas: Canvas) {
         val top = dp(62)
         val gap = dp(7)
-        val keyHeight = (contentBottom() - top - gap - keyboardBottomReserve().coerceAtLeast(dp(30)) - dp(58) - gap * 3) / 4f
+        val keyHeight = (contentBottom() - top - gap - keyboardBottomReserve() - dp(58) - gap * 3) / 4f
         val edge = dp(5)
         val symbolWidth = (width - edge * 2 - dp(7) * 9) / 10f
         // Main keyboard symbol pages follow the common mobile "123" -> "#+=" flow.

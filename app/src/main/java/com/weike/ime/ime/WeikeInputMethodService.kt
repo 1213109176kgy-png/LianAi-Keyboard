@@ -1,5 +1,8 @@
 package com.weike.ime.ime
 
+import com.weike.ime.knowledge.knowledgeQuery
+import com.weike.ime.knowledge.withKnowledge
+
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.Context
@@ -122,6 +125,64 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private var replyOptions: List<String> = emptyList()
     private var replyLoading = false
     private var replyEmotion = ""
+    private val knowledgeStore by lazy { com.weike.ime.knowledge.KnowledgeStore(this) }
+    private var selectedKnowledgeDocumentId: String? = com.weike.ime.knowledge.KnowledgeStore.DEFAULT_DOCUMENT_ID
+    private var knowledgeSnapshot: com.weike.ime.knowledge.KnowledgeSnapshot? = null
+    private var aiRequestVersion = 0L
+    private var aiResultGuard: (() -> Boolean)? = null
+    private fun invalidateKnowledgeResults() {
+        aiRequestVersion++
+        aiResultGuard = null
+        knowledgeSnapshot = null
+        replyOptions = emptyList(); polishOptions = emptyList()
+        replyLoading = false; polishLoading = false
+    }
+    private fun prepareKnowledge(source: String): Pair<com.weike.ime.knowledge.KnowledgeSnapshot, () -> Boolean> {
+        invalidateKnowledgeResults()
+        val request = aiRequestVersion
+        val session = editorSessionId
+        val selected = selectedKnowledgeDocumentId
+        val activeMode = mode
+        val relation = polishRelation
+        val settings = cloudApiSettings
+        val prompt = replyPrompt
+        val relations = relationPrompts.toMap()
+        val account = if (::container.isInitialized) container.userSession.user()?.id else null
+        val snapshot = knowledgeStore.snapshot(selected, source)
+        if (selected != null && snapshot.documentId == null) selectedKnowledgeDocumentId = null
+        val guard = {
+            request == aiRequestVersion && session == editorSessionId && !sensitiveField &&
+                mode == activeMode && selectedKnowledgeDocumentId == snapshot.documentId && relation == polishRelation &&
+                settings == cloudApiSettings && prompt == replyPrompt && relations == relationPrompts &&
+                account == (if (::container.isInitialized) container.userSession.user()?.id else null) &&
+                (if (activeMode == KeyboardMode.VOICE) polishDraft.trim() == source else replySource.trim() == source) &&
+                (snapshot.failed || knowledgeStore.isCurrent(snapshot))
+        }
+        aiResultGuard = guard
+        return snapshot to guard
+    }
+    override fun chooseKnowledge() {
+        if (sensitiveField) return
+        try {
+            val documents = knowledgeStore.read().documents.filter { it.enabled }
+            val labels = arrayOf("未选择知识库") + documents.map { it.title }
+            val dialog = android.app.AlertDialog.Builder(this).setTitle("选择知识库")
+                .setSingleChoiceItems(labels, documents.indexOfFirst { it.id == selectedKnowledgeDocumentId } + 1) { d, index ->
+                    selectedKnowledgeDocumentId = documents.getOrNull(index - 1)?.id
+                    knowledgeStore.selectDocument(selectedKnowledgeDocumentId)
+                    invalidateKnowledgeResults(); d.dismiss(); render()
+                }.setNegativeButton("取消", null).create()
+            showKnowledgeDialog(dialog)
+        } catch (_: Exception) { toast("读取知识库失败，请在 App 中检查资料") }
+    }
+    private fun showKnowledgeDialog(dialog: android.app.AlertDialog) {
+        dialog.window?.apply {
+            setType(WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG)
+            attributes = attributes.apply { token = this@WeikeInputMethodService.window?.window?.decorView?.windowToken ?: keyboard.windowToken }
+            addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        }
+        dialog.show()
+    }
     private val polisher: TextPolisher by lazy { RoutedTextPolisher(modelAccess) { endpoint ->
         MimoTextPolisher(endpointProvider = { endpoint }, replyPromptProvider = { replyPrompt },
             polishRelationProvider = { polishRelation }, relationPromptsProvider = { relationPrompts })
@@ -495,12 +556,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         }
         serviceScope.launch {
             container.settings.cloudApiSettings.collect { settings ->
+                if (cloudApiSettings != settings) invalidateKnowledgeResults()
                 cloudApiSettings = settings
+                render()
             }
         }
         refreshAppConfiguration()
-        serviceScope.launch { container.settings.replyPrompt.collect { replyPrompt = it } }
-        serviceScope.launch { container.settings.relationPrompts.collect { relationPrompts = it } }
+        serviceScope.launch { container.settings.replyPrompt.collect { if (replyPrompt != it) invalidateKnowledgeResults(); replyPrompt = it; render() } }
+        serviceScope.launch { container.settings.relationPrompts.collect { if (relationPrompts != it) invalidateKnowledgeResults(); relationPrompts = it; render() } }
         serviceScope.launch {
             container.settings.historyRetention.collect { retention ->
                 pruneHistory(retention)
@@ -819,6 +882,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         lastPackageName = attribute?.packageName
         sensitiveField = isSensitive(attribute)
         if (!configurationRestart) {
+            selectedKnowledgeDocumentId = runCatching { knowledgeStore.selectedDocumentId() }.getOrNull()
+            invalidateKnowledgeResults()
             editorSessionId += 1
             currentInputConnection?.finishComposingText()
             clearTextCompositions()
@@ -853,6 +918,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         super.onStartInputView(info, restarting)
         inputViewActive = true
         refreshAppConfiguration()
+        // Management may change the default while this editor is hidden. Some
+        // ROMs reopen only the input view, so refresh before any reply action.
+        val storedKnowledge = runCatching { knowledgeStore.selectedDocumentId() }.getOrNull()
+        if (storedKnowledge != selectedKnowledgeDocumentId) {
+            selectedKnowledgeDocumentId = storedKnowledge
+            invalidateKnowledgeResults()
+        }
         autoPunctuationPending = false
         if (pendingAskRestore) {
             pendingAskRestore = false
@@ -912,6 +984,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun onFinishInput() {
+        invalidateKnowledgeResults()
         // Some Xiaomi rotation paths finish the editor before they finish the
         // input view. Capture here too; the snapshot is accepted only by the
         // same package/input type/field during the five-second rotation window.
@@ -1047,6 +1120,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     private fun applyMode(nextMode: KeyboardMode) {
         val previous = mode
+        if (previous != nextMode) invalidateKnowledgeResults()
         mode = nextMode
         if (previous != nextMode) clearPredictions()
         rememberKeyboardMode(mode)
@@ -1412,6 +1486,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         lastVisionUri = uri
         visionJob?.cancel()
         replySource = ""
+        invalidateKnowledgeResults()
+        val visionRequest = aiRequestVersion
+        val visionEditorSession = editorSessionId
+        val visionDocument = selectedKnowledgeDocumentId
+        val visionSettings = cloudApiSettings
+        val visionGuard = { visionRequest == aiRequestVersion && visionEditorSession == editorSessionId &&
+            !sensitiveField && mode == KeyboardMode.ASK && selectedKnowledgeDocumentId == visionDocument && cloudApiSettings == visionSettings }
+        aiResultGuard = visionGuard
         replyOptions = emptyList()
         replyEmotion = "识别截图中…"
         replyLoading = true
@@ -1423,6 +1505,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             val route = try { modelAccess.route(ModelFeature.VISION) }
                 catch (error: CancellationException) { throw error }
                 catch (error: Exception) {
+                    if (!visionGuard()) return@launch
                     replyLoading = false
                     voiceState = VoiceUiState.Error(error.message.orEmpty())
                     if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
@@ -1448,15 +1531,27 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 null
             }
             if (image == null) {
+                if (!visionGuard()) return@launch
                 replyLoading = false
                 voiceState = VoiceUiState.Error("读取图片超时，请重新选择")
                 render()
                 return@launch
             }
             val (base64, mime) = image
-            (if (route.official) visionReplyClient.reply(route.endpoint.apiKey, base64, mime)
-             else visionReplyClient.replyWithModel(route.endpoint, base64, mime))
+            val visionResult = if (route.official) visionReplyClient.reply(route.endpoint.apiKey, base64, mime)
+                else visionReplyClient.replyWithModel(route.endpoint, base64, mime)
+            if (!visionGuard()) return@launch
+            val snapshot = knowledgeStore.snapshot(visionDocument, visionResult.getOrNull()?.knowledgeQuery().orEmpty())
+            val materialGuard = { visionGuard() && !snapshot.failed && knowledgeStore.isCurrent(snapshot) }
+            aiResultGuard = materialGuard
+            val finalResult = visionResult.fold(
+                onSuccess = { it.withKnowledge(snapshot, polisher) },
+                onFailure = { Result.failure(it) }
+            )
+            finalResult
                 .onSuccess { result ->
+                    if (!materialGuard()) { invalidateKnowledgeResults(); render(); return@onSuccess }
+                    knowledgeSnapshot = snapshot
                     replyLoading = false
                     replyOptions = result.replies
                     replyEmotion = buildString {
@@ -1468,8 +1563,10 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                     render()
                 }
                 .onFailure { error ->
+                    if (!visionGuard()) return@onFailure
                     replyLoading = false
                     voiceState = VoiceUiState.Error(error.message ?: "识别失败，请稍后重试")
+                    if (error is ModelSetupRequiredException) showModelSetupDialog(error.message.orEmpty())
                     if (mode != KeyboardMode.ASK) applyMode(KeyboardMode.ASK)
                     render()
                 }
@@ -1522,11 +1619,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun selectReplyOption(text: String) {
         if (mode != KeyboardMode.ASK || text.isBlank()) return
+        if (sensitiveField || text !in replyOptions || aiResultGuard?.invoke() == false) { invalidateKnowledgeResults(); render(); return }
         replaceCurrentFieldWithAiOption(text)
         render()
     }
 
     override fun dismissReplyOptions() {
+        invalidateKnowledgeResults()
         replyOptions = emptyList()
         replyLoading = false
         replyEmotion = ""
@@ -1537,6 +1636,8 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     private fun generateReplyOptions() {
         val source = replySource.trim()
         if (source.isBlank()) return
+        val (snapshot, guard) = prepareKnowledge(source)
+        if (snapshot.failed) { voiceState = VoiceUiState.Error("知识库读取失败，请重试或选择不使用知识库"); render(); return }
         replyLoading = true
         replyOptions = emptyList()
         aiGuide = null
@@ -1548,12 +1649,15 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         voiceState = VoiceUiState.Idle
         render()
         serviceScope.launch {
-            polisher.suggestReplies(source).onSuccess {
+            polisher.suggestRepliesWithKnowledge(source, snapshot.prompt()).onSuccess {
+                if (!guard()) { render(); return@onSuccess }
+                knowledgeSnapshot = snapshot
                 replyLoading = false
                 aiGuide = null
                 replyOptions = it
                 render()
             }.onFailure { error ->
+                if (!guard()) { render(); return@onFailure }
                 replyLoading = false
                 Log.w(TAG, "Reply suggestions unavailable; showing setup guide", error)
                 // 未配置类（ModelSetupRequiredException）由 withModelAccess 弹出
@@ -1572,6 +1676,7 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
     }
 
     override fun setPolishRelation(relation: String) {
+        invalidateKnowledgeResults()
         polishRelation = relation.takeIf { it in setOf("通用", "心动对象", "恋人", "朋友", "客户", "上司", "同事", "家人") } ?: "通用"
     }
 
@@ -1606,18 +1711,23 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
                 render()
                 return@withModelAccess
             }
+            val (snapshot, guard) = prepareKnowledge(source)
+            if (snapshot.failed) { voiceState = VoiceUiState.Error("知识库读取失败，请重试或选择不使用知识库"); render(); return@withModelAccess }
             polishLoading = true
             polishOptions = emptyList()
             aiGuide = null
             render()
             serviceScope.launch {
-                polisher.suggestPolishes(source, polishRelation).onSuccess { options ->
+                polisher.suggestPolishesWithKnowledge(source, polishRelation, snapshot.prompt()).onSuccess { options ->
+                    if (!guard()) { render(); return@onSuccess }
+                    knowledgeSnapshot = snapshot
                     polishLoading = false
                     aiGuide = null
                     polishOptions = options
                     voiceState = VoiceUiState.Idle
                     render()
                 }.onFailure { error ->
+                    if (!guard()) { render(); return@onFailure }
                     polishLoading = false
                     Log.w(TAG, "Polish suggestions unavailable; showing setup guide", error)
                     if (error is ModelSetupRequiredException) {
@@ -1635,11 +1745,13 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
 
     override fun selectPolishOption(text: String) {
         if (mode != KeyboardMode.VOICE || text.isBlank()) return
+        if (sensitiveField || text !in polishOptions || aiResultGuard?.invoke() != true) { invalidateKnowledgeResults(); render(); return }
         replaceCurrentFieldWithAiOption(text)
         render()
     }
 
     override fun dismissPolishOptions() {
+        invalidateKnowledgeResults()
         polishOptions = emptyList()
         polishLoading = false
         render()
@@ -2808,6 +2920,14 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         // is thread-local and must only be obtained from the main looper.
         mainHandler.post {
             if (!::keyboard.isInitialized || renderPending) return@post
+            if (aiResultGuard?.invoke() == false) invalidateKnowledgeResults()
+            keyboard.knowledgeLabel = try {
+                val state = knowledgeStore.read()
+                if (selectedKnowledgeDocumentId != null && state.documents.none { it.id == selectedKnowledgeDocumentId && it.enabled }) {
+                    selectedKnowledgeDocumentId = null; knowledgeStore.selectDocument(null); invalidateKnowledgeResults()
+                }
+                state.documents.firstOrNull { it.id == selectedKnowledgeDocumentId }?.title ?: "未选择知识库"
+            } catch (_: Exception) { "读取失败" }
             renderPending = true
             Choreographer.getInstance().postFrameCallback(renderFrameCallback)
         }

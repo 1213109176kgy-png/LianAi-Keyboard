@@ -20,7 +20,8 @@ import kotlin.coroutines.resumeWithException
 data class VisionReplyResult(
     val scenario: String,
     val analysis: String,
-    val replies: List<String>
+    val replies: List<String>,
+    val sourceMessage: String = ""
 )
 
 /** 截图识别回复：走后台视觉模型（登录态），后台自动按模型价格记账。 */
@@ -32,7 +33,7 @@ class VisionReplyClient(
 ) {
     /** 自配视觉参数直接请求用户选择的服务商。 */
     suspend fun replyWithModel(config: ModelEndpointConfig, imageBase64: String, mime: String): Result<VisionReplyResult> = runCatching {
-        val prompt = "识别聊天截图中对方最新的话，以用户本人的第一人称生成3条自然得体的回复。只输出JSON：{\"scenario\":\"恋爱|朋友|商务|家人|其他\",\"analysis\":\"不超过20字\",\"replies\":[\"稳妥回复\",\"进阶回复\",\"巧思回复\"]}"
+        val prompt = "识别聊天截图中对方最新的话，以用户本人的第一人称生成3条自然得体的回复。sourceMessage填写识别出的对方最新原话，无法识别则留空，不编造。只输出JSON：{\"sourceMessage\":\"对方原话\",\"scenario\":\"恋爱|朋友|商务|家人|其他\",\"analysis\":\"不超过20字\",\"replies\":[\"稳妥回复\",\"进阶回复\",\"巧思回复\"]}"
         val (url, payload) = when (config.provider.textProtocol) {
             TextProviderProtocol.OPENAI_CHAT -> MimoApiConfig.chatCompletionsEndpoint(config.url) to JSONObject()
                 .put("model", config.model).put("max_tokens", 4096).put("messages", JSONArray()
@@ -69,7 +70,7 @@ class VisionReplyClient(
             val list = result.optJSONArray("replies") ?: JSONArray()
             val replies = (0 until list.length()).map { list.optString(it).trim() }.filter { it.isNotBlank() }.take(3)
             check(replies.isNotEmpty()) { "未识别到可回复的内容，请换一张截图" }
-            VisionReplyResult(result.optString("scenario"), result.optString("analysis"), replies)
+            VisionReplyResult(result.optString("scenario"), result.optString("analysis"), replies, result.optString("sourceMessage"))
         }
     }
 
@@ -105,7 +106,8 @@ class VisionReplyClient(
             VisionReplyResult(
                 scenario = json.optString("scenario"),
                 analysis = json.optString("analysis"),
-                replies = replies
+                replies = replies,
+                sourceMessage = json.optString("sourceMessage")
             )
         }
     }

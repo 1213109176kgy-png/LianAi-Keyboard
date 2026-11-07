@@ -24,6 +24,7 @@ class KeyboardTouchRegressionTest {
     private class Fixture(val sensitive: Boolean) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val codes = mutableListOf<String>()
+        val actionCalls = mutableListOf<String>()
         val editor = EditText(context).apply {
             inputType = if (sensitive) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 else InputType.TYPE_CLASS_TEXT
@@ -31,6 +32,7 @@ class KeyboardTouchRegressionTest {
         val sound = KeyboardSoundPlayer(context)
         val actions = Proxy.newProxyInstance(KeyboardActions::class.java.classLoader,
             arrayOf(KeyboardActions::class.java)) { _, method, args ->
+            actionCalls += method.name
             when (method.name) {
                 "typePinyin" -> { codes += args!![0] as String; editor.append(args[0] as String); null }
                 "canBackspace" -> true
@@ -90,6 +92,31 @@ class KeyboardTouchRegressionTest {
         instrumentation.runOnMainSync {
             val fixture = Fixture(sensitive)
             try { test(fixture) } finally { fixture.sound.release() }
+        }
+    }
+
+    @Test fun aiTabsKeepKeyboardTabHeightAndFooterDoesNotStealVoiceOrLanguageTouches() = withKeyboard { f ->
+        val tabs = f.view.javaClass.getDeclaredField("modeTabs").apply { isAccessible = true }
+        val originalTabHeight = (tabs.get(f.view) as RectF).height()
+        for (mode in listOf(KeyboardMode.ASK, KeyboardMode.VOICE)) {
+            f.view.update(mode = mode, pinyinNineKey = true)
+            f.view.measure(View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            f.view.layout(0, 0, 1080, f.view.measuredHeight); f.redraw()
+            assertEquals(originalTabHeight, (tabs.get(f.view) as RectF).height(), .1f)
+            val space = f.view.javaClass.getDeclaredField("knowledgeFooterBounds").apply { isAccessible = true }.get(f.view) as RectF?
+            val footerY = space?.centerY() ?: (f.view.height - 30f * f.density)
+            f.actionCalls.clear()
+            f.event(MotionEvent.ACTION_DOWN, Triple(0, f.view.width / 2f, footerY))
+            f.event(MotionEvent.ACTION_UP, Triple(0, f.view.width / 2f, footerY))
+            assertTrue("Footer should open knowledge selection", "chooseKnowledge" in f.actionCalls)
+            if (mode == KeyboardMode.VOICE) {
+                for ((x, expected) in listOf(40f * f.density to "switchInputMethod", (f.view.width - 40f * f.density) to "toggleDictation")) {
+                    f.actionCalls.clear()
+                    f.event(MotionEvent.ACTION_DOWN, Triple(0, x, footerY)); f.event(MotionEvent.ACTION_UP, Triple(0, x, footerY))
+                    assertTrue("Bottom icon must remain tappable: $expected", expected in f.actionCalls)
+                    assertTrue("Knowledge target must not overlap bottom icons", "chooseKnowledge" !in f.actionCalls)
+                }
+            }
         }
     }
 

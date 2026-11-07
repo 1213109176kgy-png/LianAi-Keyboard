@@ -47,3 +47,25 @@ storage.
 AndroidX, Room, DataStore, OkHttp, Kotlin coroutines, and Kotlin serialization
 are distributed under their respective upstream licenses. A release SBOM must
 be attached to every published APK.
+
+## Bundled relationship knowledge
+
+`app/src/main/assets/knowledge/goutoujunshi.md` contains adapted documentation from
+shengjidaguai-china/goutoujunshi, commit 6db7354a4002dc7c448a9c87ffdad8132570c9d3.
+Copyright (c) 2026 powerycy. Licensed under the MIT License. The complete original
+copyright and permission notice is retained separately in
+`app/src/main/assets/knowledge/goutoujunshi.LICENSE.txt` and is not included in model references. Third-party books,
+papers and websites referenced by the documentation retain their own copyrights.
+## Bundled Tong Jincheng knowledge
+
+`app/src/main/assets/knowledge/tong-jincheng.md` is an adapted, condensed relationship-communication reference from
+https://github.com/hotcoffeeshake/tong-jincheng-skill at commit `4ae93806a3f9e7c8bfa5d951a786e73c6e4b6e4e`.
+Copyright (c) 2026 hotcoffeeshake. MIT License. The complete permission notice is packaged separately at
+`app/src/main/assets/knowledge/tong-jincheng.LICENSE.txt`, outside material retrieved for AI requests.
+Installation steps, research provenance, personal biography, role-play instructions and duplicate quotations are excluded from the runtime reference.
+
+## Markwon rendering
+
+Knowledge document Markdown rendering uses Markwon 4.6.2 (core, tables, strikethrough, task lists).
+Copyright 2017 Dimitry Ivanov (https://github.com/noties/Markwon), Apache License 2.0.
+Markwon uses commonmark-java (BSD 2-Clause). License texts are included in the dependency artifacts.

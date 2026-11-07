@@ -47,6 +47,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.weike.ime.ui.SubscriptionViews
 import com.weike.ime.ui.ModelConfigurationViews
+import com.weike.ime.ui.ManagementLayout
 import com.weike.ime.network.ModelThinking
 import com.weike.ime.data.PendingPurchase
 import com.weike.ime.data.AppContainer
@@ -94,7 +95,7 @@ class MainActivity : AppCompatActivity() {
     private enum class Page {
         ACCOUNT, PROFILE, SUBSCRIPTION, SETTINGS, CLOUD, ABOUT, USAGE_GUIDE,
         LAYOUT, KEY_EFFECTS, AUXILIARY_INPUT, TOOLBAR, KEYBOARD_MANAGEMENT,
-        CLIPBOARD_SETTINGS, LOCAL_DATA, OPTIMIZE_INPUT, PERMISSION_MANAGEMENT, TEST
+        CLIPBOARD_SETTINGS, LOCAL_DATA, OPTIMIZE_INPUT, PERMISSION_MANAGEMENT, TEST, KNOWLEDGE
     }
 
     private class SegmentedControl(
@@ -554,6 +555,43 @@ class MainActivity : AppCompatActivity() {
     private var page = Page.ACCOUNT
     private var cloudReturnPage = Page.SETTINGS
     private val bottomNavItems = mutableMapOf<Page, LinearLayout>()
+    private lateinit var bottomNavigation: View
+    private var importingKnowledge = false
+    private var knowledgeViews: com.weike.ime.knowledge.KnowledgeViews? = null
+    private val knowledgeImport = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val importing = importingKnowledge
+        importingKnowledge = false
+        if (uri != null && importing) lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val name = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else ""
+                    }.orEmpty()
+                    require(name.substringAfterLast('.', "").lowercase() in setOf("txt", "md")) { "首版仅支持 TXT、MD 文件" }
+                    val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        while (out.size() <= 1048576) {
+                            val count = input.read(buffer, 0, minOf(buffer.size, 1048577 - out.size()))
+                            if (count < 0) break
+                            out.write(buffer, 0, count)
+                        }
+                        out.toByteArray()
+                    } ?: error("无法读取文件")
+                    require(bytes.size <= 1048576) { "请选择 1MB 以内的资料" }
+                    val body = when {
+                        bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> bytes.toString(Charsets.UTF_16LE).removePrefix("\uFEFF")
+                        bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> bytes.toString(Charsets.UTF_16BE).removePrefix("\uFEFF")
+                        else -> try { Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString() }
+                            catch (_: java.nio.charset.CharacterCodingException) { java.nio.charset.Charset.forName("GB18030").newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString() }
+                    }
+                    require(!body.contains('\u0000') && body.isNotBlank() && body.length <= 300000) { "正文为空、非文本或超过30万字" }
+                    name.substringBeforeLast('.') to body.removePrefix("\uFEFF")
+                }
+                knowledgeViews?.editDocument(null, result.first, result.second)
+            } catch (e: Exception) { Toast.makeText(this@MainActivity, e.message ?: "导入失败", Toast.LENGTH_LONG).show() }
+        }
+    }
     private val pageScrollPositions = mutableMapOf<Page, Int>()
 
     private var statMinutes: TextView? = null
@@ -591,6 +629,7 @@ class MainActivity : AppCompatActivity() {
     }
     private val settingsBackCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
+            if (page == Page.KNOWLEDGE && knowledgeViews?.requestLeave() == true) return
             showPage(parentPage(page))
         }
     }
@@ -784,16 +823,19 @@ class MainActivity : AppCompatActivity() {
             }
             addView(bottomNavItem(R.drawable.ic_lucide_house, "首页", Page.ACCOUNT), LinearLayout.LayoutParams(0, dp(58), 1f))
             addView(bottomNavItem(R.drawable.ic_lucide_keyboard, "键盘", Page.TEST), LinearLayout.LayoutParams(0, dp(58), 1f))
+            addView(bottomNavItem(R.drawable.ic_lucide_book_open, "知识库", Page.KNOWLEDGE), LinearLayout.LayoutParams(0, dp(58), 1f))
             addView(bottomNavItem(R.drawable.ic_lucide_user_round, "我的", Page.PROFILE), LinearLayout.LayoutParams(0, dp(58), 1f))
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)))
+        }.also { bottomNavigation = it }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(72)))
     }
 
     private fun showPage(next: Page) {
+        if (page == Page.KNOWLEDGE && knowledgeViews?.requestLeave { showPage(next) } == true) return
         while (pageHost.childCount > 1) pageHost.removeViewAt(0)
         val previous = pageHost.getChildAt(0)
         val previousPage = page
         (previous as? ScrollView)?.let { pageScrollPositions[previousPage] = it.scrollY }
         page = next
+        bottomNavigation.visibility = View.VISIBLE
         updateBottomNavState()
         val nextView = when (next) {
                 Page.ACCOUNT -> buildAccount()
@@ -813,6 +855,12 @@ class MainActivity : AppCompatActivity() {
                 Page.OPTIMIZE_INPUT -> buildOptimizeInput()
                 Page.PERMISSION_MANAGEMENT -> buildPermissionManagement()
                 Page.TEST -> buildTestPage()
+                Page.KNOWLEDGE -> com.weike.ime.knowledge.KnowledgeViews(this, onDetailChanged = { detail ->
+                    bottomNavigation.visibility = if (detail) View.GONE else View.VISIBLE
+                }) {
+                    importingKnowledge = true
+                    knowledgeImport.launch(arrayOf("text/*", "application/octet-stream"))
+                }.also { knowledgeViews = it }.build()
             }
         if (previous == null) {
             pageHost.addView(nextView)
@@ -1413,12 +1461,6 @@ class MainActivity : AppCompatActivity() {
         addView(illustratedOptionCard("逗号与句号快捷键", operationGuide("在拼音和英文空格键左侧显示逗号和句号", "逗号键长按或上滑可输入句号"), punctuationShortcuts) {
             lifecycleScope.launch { punctuationShortcuts.setChecked(container.settings.punctuationShortcuts()) }
         }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
-        val cursorSlider = BlueToggle(this@MainActivity, true) { enabled ->
-            lifecycleScope.launch { container.settings.saveCursorSliderEnabled(enabled) }
-        }
-        addView(illustratedOptionCard("光标滑块", operationGuide("键盘底部显示全宽滑块", "左右拖动可逐字移动光标"), cursorSlider) {
-            lifecycleScope.launch { cursorSlider.setChecked(container.settings.cursorSliderEnabled()) }
-        }, margins(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, top = 12))
         addView(illustratedOptionCard("Logo 定制", operationGuide("选择键盘左上角的品牌 Logo", "自定义模式可分别选择暗色和亮色键盘图片")) {
             val options = listOf(KeyboardLogoStyle.VERTICK, KeyboardLogoStyle.CUSTOM)
             lateinit var customImageChoices: LinearLayout
@@ -1974,6 +2016,7 @@ class MainActivity : AppCompatActivity() {
         val selected = when (page) {
             Page.ACCOUNT -> Page.ACCOUNT
             Page.TEST -> Page.TEST
+            Page.KNOWLEDGE -> Page.KNOWLEDGE
             else -> Page.PROFILE
         }
         bottomNavItems.forEach { (target, item) ->
@@ -2999,18 +3042,19 @@ class MainActivity : AppCompatActivity() {
         addView(ImageView(this@MainActivity).apply {
             setImageResource(R.drawable.ic_lucide_chevron_left)
             setColorFilter(getColor(R.color.weike_text))
-            setPadding(dp(14), dp(14), dp(14), dp(14))
+            val padding = dp(ManagementLayout.BACK_PADDING_DP)
+            setPadding(padding, padding, padding, padding)
             contentDescription = "返回"
             setOnClickListener { back() }
-        }, LinearLayout.LayoutParams(dp(52), dp(64)))
+        }, LinearLayout.LayoutParams(dp(ManagementLayout.BACK_WIDTH_DP), dp(ManagementLayout.HEADER_HEIGHT_DP)))
         addView(TextView(this@MainActivity).apply {
             text = title
-            textSize = 14f
+            textSize = ManagementLayout.TITLE_SP
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(getColor(R.color.weike_text))
-        }, LinearLayout.LayoutParams(0, dp(64), 1f))
-        addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(52), dp(64)))
+        }, LinearLayout.LayoutParams(0, dp(ManagementLayout.HEADER_HEIGHT_DP), 1f))
+        addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(ManagementLayout.BACK_WIDTH_DP), dp(ManagementLayout.HEADER_HEIGHT_DP)))
     }
 
     private fun settingsHubHeader(title: String, back: () -> Unit) = LinearLayout(this).apply {
@@ -3696,7 +3740,7 @@ class MainActivity : AppCompatActivity() {
         setBackgroundColor(getColor(R.color.weike_background))
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(38), dp(20), dp(28))
+            setPadding(dp(ManagementLayout.PAGE_HORIZONTAL_DP), dp(ManagementLayout.PAGE_TOP_DP), dp(ManagementLayout.PAGE_HORIZONTAL_DP), dp(ManagementLayout.PAGE_BOTTOM_DP))
             children()
         })
     }
