@@ -1400,6 +1400,17 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
         render()
     }
 
+    override fun pastePrimaryClipboard() {
+        val content = runCatching {
+            clipboardManager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+        }.getOrNull()
+        if (content.isNullOrEmpty()) {
+            toast("剪贴板没有可粘贴的文字")
+            return
+        }
+        typeEnglish(content)
+    }
+
     /** 截图识别回复：校验模型通道 → 一键截屏 → 视觉模型 → 多条场景化回复。 */
     private var modelSetupDialog: android.app.Dialog? = null
     private fun showModelSetupDialog(message: String) {
@@ -1698,6 +1709,26 @@ class WeikeInputMethodService : InputMethodService(), KeyboardActions {
             updateComposingText("")
             render()
         }
+    }
+
+    override fun clearPolishDraft() {
+        if (mode != KeyboardMode.VOICE) return
+        invalidateKnowledgeResults()
+        aiGuide = null
+        polishDraft = ""
+        polishCursor = 0
+        englishBuffer = ""
+        englishCandidates = emptyList()
+        voiceState = VoiceUiState.Idle
+        enqueueAfterPendingPinyin {
+            applyPinyinState(pinyinDecoder.clear(), allowCommit = false)
+            if (mode == KeyboardMode.VOICE) {
+                polishDraft = ""
+                polishCursor = 0
+            }
+            render()
+        }
+        render()
     }
 
     override fun polishCurrentText() {

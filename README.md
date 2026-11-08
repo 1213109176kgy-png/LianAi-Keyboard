@@ -6,7 +6,7 @@ An open-source Android keyboard for everyday typing, reply suggestions and messa
 
 [简体中文](README_CN.md) · [Download](https://lianai.bahuang.tech/h5/) · [Changelog](CHANGELOG.md) · [Privacy](PRIVACY.md) · [GPL-3.0-or-later](LICENSE)
 
-Current source version: **v1.6.10** (versionCode **50**). Requires Android 10 or later and an arm64-v8a device. Public download channels may publish builds separately from source updates.
+Current source version: **v1.6.12** (versionCode **52**). Requires Android 10 or later and an arm64-v8a device. Public download channels may publish builds separately from source updates.
 
 ## Features
 
@@ -31,7 +31,7 @@ The APK includes two system documents: **狗头军师知识库** and **童锦程
 
 Knowledge selection appears at the bottom of the reply panel and between the language and microphone controls in Super Say. New installations initially select 狗头军师知识库. Selecting **未选择知识库** omits reference material.
 
-AI requests include bounded excerpts from the selected document (up to about 4,800 characters of reference material), rather than the entire library. If no query terms match, the document's opening guidance is used. Read failures are reported instead of silently skipping the selected document. Screenshot replies first obtain visual context, then use the reply text route with knowledge to produce the final suggestions; this can involve two model calls. Source metadata and license notices are kept outside the reference text.
+AI requests include bounded excerpts from the selected document (up to about 4,800 characters of reference material), rather than the entire library. Retrieval preserves Markdown chapter context and ranks phrases alongside common communication intents such as comfort, invitations and conflict repair. If nothing matches, the document's opening guidance is used. Read failures are reported instead of silently skipping the selected document. Screenshot replies first obtain visual context, then use the reply text route with knowledge to produce the final suggestions; this can involve two model calls. Source metadata and license notices are kept outside the reference text.
 
 ## Install and use
 

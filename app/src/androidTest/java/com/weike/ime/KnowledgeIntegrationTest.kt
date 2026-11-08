@@ -192,6 +192,22 @@ class KnowledgeIntegrationTest {
         assertTrue(requests[1].toString().contains("先确认时间A专属"))
         assertFalse(requests[2].toString().contains("知识库"))
         assertFalse(requests[2].toString().contains("A专属"))
+        assertTrue(requests[0].toString().contains("将合适的策略与表达融入最终话术"))
+        assertTrue(requests[1].toString().contains("将合适的策略与表达融入最终话术"))
+        val store = KnowledgeStore(InstrumentationRegistry.getInstrumentation().targetContext)
+        for (id in listOf(SystemKnowledge.GOUTOU_ID, SystemKnowledge.TONG_ID)) {
+            val selected = store.snapshot(id, "今天加班到很晚，好累")
+            assertTrue(selected.passages.isNotEmpty())
+            assertTrue(selected.passages.all { it.documentId == id })
+            assertTrue("Emotional advice should outrank literal work mentions: ${selected.passages.first().title}",
+                selected.passages.first().let { it.title + it.text }.let { it.contains("情绪") || it.contains("共情") || it.contains("安慰") || it.contains("鼓励") })
+            assertTrue(polisher.suggestRepliesWithKnowledge("今天加班到很晚，好累", selected.prompt()).isSuccess)
+            assertTrue(polisher.suggestPolishesWithKnowledge("我想安慰她", "朋友", selected.prompt()).isSuccess)
+            for (request in requests.takeLast(2)) {
+                assertTrue(request.toString().contains(org.json.JSONObject.quote(selected.passages.first().text).removeSurrounding("\"")))
+                assertTrue(request.toString().contains(selected.documentTitle))
+            }
+        }
     }
 
     @Test fun requestGuardRejectsChangedSourceDocumentSessionRelationAndMaterial() {

@@ -24,6 +24,7 @@ class KeyboardTouchRegressionTest {
     private class Fixture(val sensitive: Boolean) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val codes = mutableListOf<String>()
+        val insertedSymbols = mutableListOf<String>()
         val actionCalls = mutableListOf<String>()
         val editor = EditText(context).apply {
             inputType = if (sensitive) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -35,6 +36,7 @@ class KeyboardTouchRegressionTest {
             actionCalls += method.name
             when (method.name) {
                 "typePinyin" -> { codes += args!![0] as String; editor.append(args[0] as String); null }
+                "typeEnglish" -> { insertedSymbols += args!![0] as String; null }
                 "canBackspace" -> true
                 else -> null
             }
@@ -55,6 +57,14 @@ class KeyboardTouchRegressionTest {
         fun redraw() {
             val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             view.draw(Canvas(bitmap))
+            bitmap.recycle()
+        }
+        fun snapshot(name: String) {
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bitmap))
+            java.io.File(context.getExternalFilesDir(null), name).outputStream().use {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
             bitmap.recycle()
         }
         fun key(code: String): RectF {
@@ -92,6 +102,194 @@ class KeyboardTouchRegressionTest {
         instrumentation.runOnMainSync {
             val fixture = Fixture(sensitive)
             try { test(fixture) } finally { fixture.sound.release() }
+        }
+    }
+
+    @Test fun superSayComposingCandidatesFitBetweenRelationsAndKeys() = withKeyboard { f ->
+        for (level in listOf(-3, 0, 3)) {
+            f.view.update(mode = KeyboardMode.VOICE, pinyinNineKey = true, pinyinReady = true,
+                pinyinBuffer = "a", spellingOptions = listOf("a"),
+                pinyinCandidates = listOf(PinyinCandidate("啊"), PinyinCandidate("阿")), candidateTextSizeLevel = level)
+            f.view.measure(View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            f.view.layout(0, 0, 1080, f.view.measuredHeight)
+            f.redraw()
+            fun rect(name: String) = f.view.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(f.view) as RectF
+            val candidates = rect("candidateStrip")
+            val relations = rect("polishRelationViewport")
+            val firstKey = f.key("2")
+            assertTrue("Candidates must be below relations", candidates.top > relations.bottom)
+            assertTrue("Candidates must not overlap keys", candidates.bottom <= firstKey.top + 1)
+            assertTrue("No large gap below spelling", candidates.top - relations.bottom < 50 * f.density)
+            if (level == 0) f.snapshot("polish-composing-fixed.png")
+            f.actionCalls.clear()
+            val pick = Triple(0, 20 * f.density, candidates.centerY())
+            f.event(MotionEvent.ACTION_DOWN, pick)
+            f.event(MotionEvent.ACTION_UP, pick)
+            assertTrue("chooseCandidate" in f.actionCalls)
+        }
+    }
+
+    @Test fun punctuationAndKaomojiCloseButtonsDismissTheirOwnStrips() = withKeyboard { f ->
+        for (name in listOf("punctuationStripVisible", "kaomojiStripVisible")) {
+            val flag = f.view.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            flag.setBoolean(f.view, true)
+            f.redraw()
+            f.snapshot("$name.png")
+            val point = Triple(0, f.view.width - 26 * f.density, 32 * f.density)
+            f.event(MotionEvent.ACTION_DOWN, point)
+            f.event(MotionEvent.ACTION_UP, point)
+            assertEquals(false, flag.getBoolean(f.view))
+        }
+    }
+
+    @Test fun polishEditorAndResultsOfferFreshDraftActions() = withKeyboard { f ->
+        f.view.update(mode = KeyboardMode.VOICE, polishDraft = "准备优化的旧内容", polishCursor = 8)
+        f.redraw()
+        f.snapshot("compact-polish-editor.png")
+        f.actionCalls.clear()
+        val clear = Triple(0, f.view.width - 127 * f.density, 125 * f.density)
+        f.event(MotionEvent.ACTION_DOWN, clear)
+        f.event(MotionEvent.ACTION_UP, clear)
+        assertEquals(listOf("clearPolishDraft"), f.actionCalls)
+        f.view.update(polishOptions = listOf("第一条", "第二条", "第三条"))
+        f.redraw()
+        f.snapshot("compact-polish-results.png")
+        f.actionCalls.clear()
+        val fresh = Triple(0, f.view.width - 102 * f.density, 81 * f.density)
+        f.event(MotionEvent.ACTION_DOWN, fresh)
+        f.event(MotionEvent.ACTION_UP, fresh)
+        assertEquals(listOf("clearPolishDraft"), f.actionCalls)
+    }
+
+    @Test fun eachSymbolCategoryDrawsAndTypesItsOwnContentAndReturnsToOrigin() = withKeyboard { f ->
+        f.view.update(mode = KeyboardMode.SYMBOLS)
+        val page = f.view.javaClass.getDeclaredField("symbolsPage").apply { isAccessible = true }
+        for ((index, category) in KeyboardSymbols.pages.withIndex()) {
+            page.setInt(f.view, index)
+            f.redraw()
+            f.snapshot("symbol-category-$index.png")
+            val symbol = category.rows.first().first()
+            val targets = f.view.javaClass.getDeclaredField("targets").apply { isAccessible = true }.get(f.view) as List<*>
+            val target = targets.first { it != null && it.javaClass.getDeclaredField("previewLabel").apply { isAccessible = true }.get(it) == symbol }!!
+            val box = target.javaClass.getDeclaredField("box").apply { isAccessible = true }.get(target) as RectF
+            f.insertedSymbols.clear()
+            f.event(MotionEvent.ACTION_DOWN, f.point(0, box))
+            f.event(MotionEvent.ACTION_UP, f.point(0, box))
+            assertEquals(listOf(symbol), f.insertedSymbols)
+        }
+        f.actionCalls.clear()
+        val back = Triple(0, 60 * f.density, f.view.height - 30 * f.density)
+        f.event(MotionEvent.ACTION_DOWN, back)
+        f.event(MotionEvent.ACTION_UP, back)
+        assertTrue("toggleSymbols" in f.actionCalls)
+        assertTrue("returnToNineKeyPinyin" !in f.actionCalls)
+    }
+
+    @Test fun nineKeySymbolsEntryFollowsPinyinOrNumericContext() = withKeyboard { f ->
+        val four = f.key("4")
+        val point = Triple(0, 30 * f.density, four.centerY())
+        val page = f.view.javaClass.getDeclaredField("symbolsPage").apply { isAccessible = true }
+        val numberPad = f.view.javaClass.getDeclaredField("nineKeyNumberPad").apply { isAccessible = true }
+        for (numeric in listOf(false, true)) {
+            numberPad.setBoolean(f.view, numeric)
+            f.redraw()
+            page.setInt(f.view, 0)
+            f.actionCalls.clear()
+            f.event(MotionEvent.ACTION_DOWN, point)
+            f.event(MotionEvent.ACTION_UP, point)
+            assertEquals(if (numeric) KeyboardSymbols.NUMERIC else KeyboardSymbols.CHINESE, page.getInt(f.view))
+            assertTrue("toggleSymbols" in f.actionCalls)
+            assertEquals(if (numeric) "返回数字" else "返回拼音",
+                f.view.javaClass.getDeclaredField("symbolReturnLabel").apply { isAccessible = true }.get(f.view))
+        }
+    }
+
+    @Test fun nineKeyBottomLeftTextKeyPastesClipboard() = withKeyboard { f ->
+        val seven = f.key("7")
+        val four = f.key("4")
+        val point = Triple(0, seven.centerX(), seven.centerY() + seven.centerY() - four.centerY())
+        f.actionCalls.clear()
+        f.event(MotionEvent.ACTION_DOWN, point)
+        f.event(MotionEvent.ACTION_UP, point)
+        assertEquals(listOf("pastePrimaryClipboard"), f.actionCalls)
+    }
+
+    @Test fun qwertySymbolsEntryFollowsLanguageInsteadOfLastPage() = withKeyboard { f ->
+        val page = f.view.javaClass.getDeclaredField("symbolsPage").apply { isAccessible = true }
+        for (mode in listOf(KeyboardMode.ENGLISH, KeyboardMode.PINYIN)) {
+            f.view.update(mode = mode, pinyinNineKey = false)
+            f.redraw()
+            val targets = f.view.javaClass.getDeclaredField("targets").apply { isAccessible = true }.get(f.view) as List<*>
+            var number: RectF? = null
+            for (target in targets) {
+                target!!
+                @Suppress("UNCHECKED_CAST")
+                val action = target.javaClass.getDeclaredField("action").apply { isAccessible = true }.get(target) as () -> Unit
+                f.actionCalls.clear()
+                action()
+                if ("toggleSymbols" in f.actionCalls) {
+                    number = RectF(target.javaClass.getDeclaredField("box").apply { isAccessible = true }.get(target) as RectF)
+                    break
+                }
+            }
+            assertTrue(number != null)
+            for (oldPage in listOf(0, 1, 2, 3)) {
+                page.setInt(f.view, oldPage)
+                f.actionCalls.clear()
+                f.event(MotionEvent.ACTION_DOWN, f.point(0, number!!))
+                f.event(MotionEvent.ACTION_UP, f.point(0, number!!))
+                assertEquals(if (mode == KeyboardMode.ENGLISH) KeyboardSymbols.ENGLISH else KeyboardSymbols.CHINESE, page.getInt(f.view))
+                assertTrue("toggleSymbols" in f.actionCalls)
+            }
+        }
+    }
+
+    @Test fun longDraftWrapsScrollsAndFollowsInsertionPoint() = withKeyboard { f ->
+        val draft = "这是一段较长的草稿，包含中文、English和表情🙂。\n".repeat(40)
+        f.view.update(mode = KeyboardMode.VOICE, polishDraft = draft, polishCursor = draft.length)
+        f.redraw()
+        fun field(name: String) = f.view.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(f.view)
+        val layout = field("draftLayout") as android.text.StaticLayout
+        val viewport = field("draftViewport") as RectF
+        assertTrue(layout.lineCount > 40)
+        val endScroll = field("draftScrollY") as Float
+        assertTrue(endScroll > 0)
+        assertTrue(layout.getLineBottom(layout.getLineForOffset(draft.length)) <= endScroll + viewport.height() + 1)
+        f.event(MotionEvent.ACTION_DOWN, f.point(0, viewport))
+        f.event(MotionEvent.ACTION_MOVE, Triple(0, viewport.centerX(), viewport.centerY() + 100))
+        f.redraw()
+        assertTrue((field("draftScrollY") as Float) < endScroll)
+        f.event(MotionEvent.ACTION_UP, f.point(0, viewport))
+        f.view.update(polishCursor = 0)
+        f.redraw()
+        assertEquals(0f, field("draftScrollY") as Float, .1f)
+        f.actionCalls.clear()
+        f.event(MotionEvent.ACTION_DOWN, f.point(0, viewport))
+        f.event(MotionEvent.ACTION_UP, f.point(0, viewport))
+        assertTrue("setPolishCursor" in f.actionCalls)
+    }
+
+    @Test fun resultFooterRetryAndKnowledgeShareBoundsAndRemainIndependentlyTappable() = withKeyboard { f ->
+        f.view.update(mode = KeyboardMode.ASK, replyOptions = listOf("先休息一下", "辛苦啦", "陪你聊一会儿"))
+        f.redraw()
+        val footer = f.view.javaClass.getDeclaredField("knowledgeFooterBounds").apply { isAccessible = true }.get(f.view) as RectF
+        val targets = f.view.javaClass.getDeclaredField("targets").apply { isAccessible = true }.get(f.view) as List<*>
+        var retry: RectF? = null
+        for (target in targets) {
+            target!!
+            @Suppress("UNCHECKED_CAST")
+            val action = target.javaClass.getDeclaredField("action").apply { isAccessible = true }.get(target) as () -> Unit
+            f.actionCalls.clear(); action()
+            if ("regenerateReplyOptions" in f.actionCalls) retry = RectF(target.javaClass.getDeclaredField("box").apply { isAccessible = true }.get(target) as RectF)
+        }
+        assertTrue(retry != null)
+        assertEquals(retry!!.top, footer.top, .1f)
+        assertEquals(retry!!.bottom, footer.bottom, .1f)
+        for ((box, expected) in listOf(retry!! to "regenerateReplyOptions", footer to "chooseKnowledge")) {
+            f.actionCalls.clear()
+            f.event(MotionEvent.ACTION_DOWN, f.point(0, box)); f.event(MotionEvent.ACTION_UP, f.point(0, box))
+            assertTrue(expected in f.actionCalls)
         }
     }
 

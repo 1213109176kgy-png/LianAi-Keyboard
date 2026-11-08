@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class KnowledgeRulesTest {
+    @Test fun emotionalIntentFindsAdviceUnderItsHeadingInsteadOfLiteralWorkMention() {
+        val body = "# 宝典\n## 职场\n今天加班到很晚，好累，先讨论工作安排。\n## 情绪价值\n### 安慰\n先共情、倾听，再表达陪伴，避免说教。\n## 邀约\n先确认时间。"
+        val result = KnowledgeRules.retrieve(listOf(doc("1", body)), "1", "今天加班到很晚，好累")
+        assertTrue(result.first().title.contains("情绪价值 / 安慰"))
+        assertTrue(result.first().text.contains("先共情"))
+        assertFalse(result.first().text.contains("职场"))
+        assertFalse(result.any { it.title.contains("邀约") })
+    }
+
     private fun doc(id: String, body: String, enabled: Boolean = true) = LoveDocument(id, "资料$id", body, enabled, 1)
     @Test fun strictScopeExcludesOtherDocumentsAndDisabledDocuments() {
         val documents = listOf(doc("1", "约会之前先询问时间"), doc("2", "约会B文档专属秘密"), doc("3", "约会停用秘密", false))
