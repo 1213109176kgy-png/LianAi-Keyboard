@@ -277,7 +277,7 @@ class KnowledgeIntegrationTest {
             assertEquals("狗头军师知识库", builtIn.title)
             assertEquals(isolated.assets.open(KnowledgeStore.DEFAULT_ASSET).bufferedReader().use { it.readText() }, builtIn.body)
             assertTrue(builtIn.isSystem)
-            assertTrue(builtIn.body.length > 90000)
+            assertTrue(builtIn.body.length in 2000..5000)
             assertFalse(builtIn.body.contains("来源项目"))
             assertFalse(builtIn.body.contains("Copyright"))
             val reference = store.snapshot(builtIn.id, "今天好累怎么回复")
@@ -358,6 +358,36 @@ class KnowledgeIntegrationTest {
         } finally { directory.deleteRecursively() }
     }
 
+    @Test fun revisionTwoUpgradesToCondensedGoutouAndPreservesOtherDocuments() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = java.io.File(context.cacheDir, "knowledge-condensed-${java.util.UUID.randomUUID()}").apply { mkdirs() }
+        val isolated = object : android.content.ContextWrapper(context) { override fun getFilesDir() = directory }
+        try {
+            val documents = org.json.JSONArray()
+            listOf(
+                LoveDocument(SystemKnowledge.GOUTOU_ID, "狗头军师知识库", "旧版长篇知识正文", false, 21),
+                LoveDocument(SystemKnowledge.TONG_ID, "童锦程知识库", "已有童锦程正文", true, 22),
+                LoveDocument("mine", "我的资料", "用户原文", true, 23)
+            ).forEach { d -> documents.put(org.json.JSONObject().put("id", d.id).put("title", d.title).put("body", d.body).put("enabled", d.enabled).put("updatedAt", d.updatedAt)) }
+            java.io.File(directory, "love_knowledge_v1.json").writeText(org.json.JSONObject()
+                .put("schema", 4).put("systemAssetVersions", org.json.JSONObject().put(SystemKnowledge.GOUTOU_ID, 2).put(SystemKnowledge.TONG_ID, 1))
+                .put("documents", documents).toString())
+            val store = KnowledgeStore(isolated)
+            val state = store.read()
+            val dog = state.documents.single { it.id == SystemKnowledge.GOUTOU_ID }
+            assertEquals(context.assets.open(KnowledgeStore.DEFAULT_ASSET).bufferedReader().use { it.readText() }, dog.body)
+            assertTrue(dog.body.contains("## 12. 军师回答方式"))
+            assertTrue(dog.body.length < 5000)
+            assertFalse(dog.body.contains("待用户审阅"))
+            assertFalse(dog.enabled)
+            assertEquals("已有童锦程正文", state.documents.single { it.id == SystemKnowledge.TONG_ID }.body)
+            assertEquals(LoveDocument("mine", "我的资料", "用户原文", true, 23), state.documents.single { it.id == "mine" })
+            assertEquals(state, KnowledgeStore(isolated).read())
+            store.setEnabled(dog.id, true)
+            assertTrue(store.snapshot(dog.id, "邀约 暧昧 自然接话").passages.isNotEmpty())
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun schemaThreeAddsOfflineTongDocumentWithoutReplacingExistingDocumentsOrEnableStates() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val directory = java.io.File(context.cacheDir, "knowledge-tong-upgrade-${java.util.UUID.randomUUID()}").apply { mkdirs() }
@@ -371,7 +401,9 @@ class KnowledgeIntegrationTest {
             val store = KnowledgeStore(isolated)
             val state = store.read()
             assertEquals(3, state.documents.size)
-            assertEquals(dog, state.documents.single { it.id == dog.id })
+            val upgradedDog = state.documents.single { it.id == dog.id }
+            assertEquals(dog.copy(updatedAt = upgradedDog.updatedAt), upgradedDog)
+            assertTrue(upgradedDog.updatedAt > dog.updatedAt)
             assertEquals(mine, state.documents.single { it.id == mine.id })
             val tong = state.documents.single { it.id == SystemKnowledge.TONG_ID }
             assertTrue(tong.isSystem); assertTrue(tong.enabled); assertFalse(mine.isSystem)
