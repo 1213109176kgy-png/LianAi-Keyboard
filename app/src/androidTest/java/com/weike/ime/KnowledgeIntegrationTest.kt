@@ -16,6 +16,50 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 @RunWith(AndroidJUnit4::class)
 class KnowledgeIntegrationTest {
+    @Test fun longTableRepliesWrapCompletelyInNarrowAndLargeTextReaders() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = android.view.ContextThemeWrapper(instrumentation.targetContext, R.style.Theme_Weike)
+        val source = context.assets.open(KnowledgeStore.DEFAULT_ASSET).bufferedReader().use { it.readText() }
+            .substringAfter("## 11. 高频场景短句").substringBefore("## 12.")
+        val expectedReplies = source.lineSequence().filter { it.startsWith("| ") }
+            .drop(2).map { it.trim().removePrefix("|").removeSuffix("|").split('|').last().trim() }.toList()
+        assertEquals(16, expectedReplies.size)
+        val parsed = KnowledgeMarkdownCache.prepare(context, source).get(15, java.util.concurrent.TimeUnit.SECONDS)
+        assertTrue(parsed.getSpans(0, parsed.length, io.noties.markwon.ext.tables.TableRowSpan::class.java).isEmpty())
+        expectedReplies.forEach { assertTrue("Missing reply: $it", parsed.toString().contains(it)) }
+        instrumentation.runOnMainSync {
+            val density = context.resources.displayMetrics.density
+            for (widthDp in listOf(280, 400)) for (sizeSp in listOf(15f, 23f)) {
+                val view = TextView(context).apply {
+                    textSize = sizeSp
+                    setTextColor(android.graphics.Color.BLACK)
+                    setBackgroundColor(android.graphics.Color.WHITE)
+                    setTextIsSelectable(true)
+                    setPadding((18 * density).toInt(), 0, (18 * density).toInt(), 0)
+                }
+                KnowledgeMarkdown.create(context).setParsedMarkdown(view, parsed)
+                val width = (widthDp * density).toInt()
+                view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                view.layout(0, 0, width, view.measuredHeight)
+                val layout = view.layout
+                assertEquals(parsed.length, layout.getLineEnd(layout.lineCount - 1))
+                for (line in 0 until layout.lineCount) {
+                    assertTrue("Overflow at $widthDp dp / $sizeSp sp / line $line",
+                        layout.getLineWidth(line) <= width - view.totalPaddingLeft - view.totalPaddingRight + 1)
+                }
+                if (widthDp == 280 && sizeSp == 15f) {
+                    val bitmap = android.graphics.Bitmap.createBitmap(width, minOf(view.height, (1000 * density).toInt()), android.graphics.Bitmap.Config.ARGB_8888)
+                    view.draw(android.graphics.Canvas(bitmap))
+                    java.io.File(context.getExternalFilesDir(null), "knowledge-table-wrapped.png").outputStream().use {
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    bitmap.recycle()
+                }
+            }
+        }
+    }
+
     @Test fun chosenDefaultPersistsSelectsKeyboardAndExplicitNoneStillWorks() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val token = java.util.UUID.randomUUID().toString()
@@ -117,7 +161,9 @@ class KnowledgeIntegrationTest {
             assertTrue(names.any { it.contains("BulletList") })
             assertTrue(names.any { it.contains("BlockQuote") })
             assertTrue(names.any { it.contains("Code") })
-            assertTrue(names.any { it.contains("Table") })
+            assertFalse(names.any { it.contains("TableRow") })
+            assertTrue(rendered.toString().contains("列一：值一"))
+            assertTrue(rendered.toString().contains("列二：值二"))
             views = KnowledgeViews(context) {}; root = views.build()
             views.editDocument(LoveDocument("preview-test", "排版测试", source), readInitially = true)
         }

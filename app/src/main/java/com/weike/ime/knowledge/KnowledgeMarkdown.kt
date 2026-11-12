@@ -9,6 +9,13 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tasklist.TaskListPlugin
 import com.weike.ime.R
+import org.commonmark.node.Node
+import org.commonmark.node.Paragraph
+import org.commonmark.node.StrongEmphasis
+import org.commonmark.node.Text
+import org.commonmark.node.HardLineBreak
+import org.commonmark.ext.gfm.tables.TableBlock
+import org.commonmark.ext.gfm.tables.TableHead
 
 /** Native text rendering; documents cannot execute HTML or load remote scripts/images. */
 object KnowledgeMarkdown {
@@ -17,6 +24,9 @@ object KnowledgeMarkdown {
         .usePlugin(StrikethroughPlugin.create())
         .usePlugin(TaskListPlugin.create(context))
         .usePlugin(object : AbstractMarkwonPlugin() {
+            override fun beforeRender(node: Node) {
+                expandTables(node)
+            }
             override fun configureTheme(builder: MarkwonTheme.Builder) {
                 val accent = context.getColor(R.color.weike_accent)
                 fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
@@ -29,4 +39,53 @@ object KnowledgeMarkdown {
                     .thematicBreakColor(Color.rgb(245, 218, 228))
             }
         }).build()
+
+    /** Full-width labelled rows wrap naturally on phones and remain selectable.
+     * Keep the stored Markdown untouched; only adapt its display tree.
+     */
+    private fun expandTables(parent: Node) {
+        var node = parent.firstChild
+        while (node != null) {
+            val next = node.next
+            if (node is TableBlock) {
+                val headers = mutableListOf<String>()
+                var section = node.firstChild
+                while (section != null) {
+                    var row = section.firstChild
+                    while (row != null) {
+                        var cell = row.firstChild
+                        var column = 0
+                        val paragraph = Paragraph()
+                        while (cell != null) {
+                            if (section is TableHead) {
+                                headers += plainText(cell)
+                            } else {
+                                if (column > 0) paragraph.appendChild(HardLineBreak())
+                                paragraph.appendChild(StrongEmphasis().apply {
+                                    appendChild(Text(headers.getOrElse(column) { "第 ${column + 1} 列" } + "："))
+                                })
+                                while (cell.firstChild != null) paragraph.appendChild(cell.firstChild)
+                            }
+                            column++
+                            cell = cell.next
+                        }
+                        if (section !is TableHead) node.insertBefore(paragraph)
+                        row = row.next
+                    }
+                    section = section.next
+                }
+                node.unlink()
+            } else expandTables(node)
+            node = next
+        }
+    }
+
+    private fun plainText(node: Node): String = buildString {
+        if (node is Text) append(node.literal)
+        var child = node.firstChild
+        while (child != null) {
+            append(plainText(child))
+            child = child.next
+        }
+    }
 }
