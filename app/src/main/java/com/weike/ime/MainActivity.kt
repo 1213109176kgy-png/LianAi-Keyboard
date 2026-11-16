@@ -1027,6 +1027,14 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(dp(20), dp(20)))
         })
 
+        if (sessionUser != null) {
+            addView(section("账号设置"))
+            addView(card().apply {
+                addView(actionRow("修改密码", "验证旧密码后设置新密码", icon = R.drawable.ic_lucide_shield_check) {
+                    showChangePasswordDialog()
+                })
+            })
+        }
         addView(section("订阅"))
         addView(card().apply {
             addView(
@@ -2522,6 +2530,66 @@ class MainActivity : AppCompatActivity() {
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         return dialog
+    }
+
+    private fun showChangePasswordDialog() {
+        val token = container.userSession.token() ?: return
+        fun passwordField(hint: String, autofillHint: String) = compactField(hint).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setAutofillHints(autofillHint)
+        }
+
+        val oldInput = passwordField("旧密码", View.AUTOFILL_HINT_PASSWORD)
+        val newInput = passwordField("新密码（8～64 位）", "newPassword")
+        val confirmInput = passwordField("再次输入新密码", "newPassword")
+        val status = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.rgb(255, 71, 87))
+            visibility = View.GONE
+        }
+        fun showError(message: String) {
+            status.text = message
+            status.visibility = View.VISIBLE
+        }
+
+        val button = compactFormActionButton("确认修改", true) {}
+        val dialog = themedDialog("修改密码", "修改后，其他登录会话需要重新登录") { body, _ ->
+            body.addView(oldInput)
+            body.addView(newInput)
+            body.addView(confirmInput)
+            body.addView(status)
+            body.addView(button, margins(ViewGroup.LayoutParams.MATCH_PARENT, dp(46), top = 10))
+        }
+        button.setOnClickListener {
+            val oldPassword = oldInput.text.toString()
+            val newPassword = newInput.text.toString()
+            val error = when {
+                oldPassword.isEmpty() -> "请输入旧密码"
+                newPassword.length !in 8..64 -> "新密码需为 8～64 位"
+                oldPassword == newPassword -> "新密码不能与旧密码相同"
+                newPassword != confirmInput.text.toString() -> "两次输入的新密码不一致"
+                else -> null
+            }
+            if (error != null) {
+                showError(error)
+                return@setOnClickListener
+            }
+            status.visibility = View.GONE
+            button.isEnabled = false
+            button.text = "正在修改…"
+            lifecycleScope.launch {
+                userAuthClient.changePassword(token, oldPassword, newPassword).onSuccess {
+                    dialog.dismiss()
+                    Toast.makeText(this@MainActivity, "密码已修改", Toast.LENGTH_SHORT).show()
+                }.onFailure { failure ->
+                    button.isEnabled = true
+                    button.text = "确认修改"
+                    showError(failure.message ?: "修改失败，请稍后重试")
+                }
+            }
+        }
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        dialog.show()
     }
 
     private fun confirmLogout() {

@@ -54,6 +54,23 @@ class UserAuthClient(
         }
     }
 
+    suspend fun changePassword(token: String, oldPassword: String, newPassword: String): Result<Unit> = runCatching {
+        val body = JSONObject()
+            .put("oldPassword", oldPassword)
+            .put("newPassword", newPassword)
+            .toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        val request = Request.Builder()
+            .url("$BASE/password")
+            .header(AUTH_HEADER, "Bearer $token")
+            .post(body)
+            .build()
+        client.newCall(request).await { response ->
+            check(response.isSuccessful) { responseError(response) }
+            check(JSONObject(response.body?.string().orEmpty()).optBoolean("ok")) { "无法确认密码是否已修改" }
+        }
+    }
+
     suspend fun logout(token: String): Result<Unit> = runCatching {
         val request = Request.Builder()
             .url("$BASE/logout")
